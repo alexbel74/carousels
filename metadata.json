@@ -1,0 +1,7 @@
+{
+  "name": "Carousel Pro - Nano Banana",
+  "description": "Professional tool for creating seamless AI-powered carousels for Telegram using Gemini 3 Pro Image. Generate connected visuals and engaging posts from single topics.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
