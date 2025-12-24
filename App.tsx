@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Send, Image as ImageIcon, Trash2, CheckCircle, Loader2,
-  Layout, Type as TypeIcon, Globe, ShieldCheck, X, Zap, Sparkles, Cloud, Server, Cpu, AlertCircle, Share2, Link as LinkIcon, Download, RotateCw, Calendar, Clock
+  Layout, Type as TypeIcon, Globe, ShieldCheck, X, Zap, Sparkles, Cloud, Server, Cpu, AlertCircle, Share2, Link as LinkIcon, Download, RotateCw, Calendar, Clock, MessageSquare
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { CarouselPost, GenerationSettings, AppState, Language, TelegramSettings, KieSettings, OpenRouterSettings, SystemInstructions } from './types';
@@ -43,6 +43,16 @@ const App: React.FC = () => {
   const [isRegeneratingText, setIsRegeneratingText] = useState(false);
   const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
   
+  // Custom Modal State for Refinement
+  const [refinementModal, setRefinementModal] = useState<{
+    isOpen: boolean;
+    type: 'all' | 'text' | 'image';
+    targetPost: CarouselPost | null;
+    targetImageId?: string;
+    targetDescription?: string;
+  }>({ isOpen: false, type: 'all', targetPost: null });
+  const [refinementText, setRefinementText] = useState('');
+
   const [tgSettings, setTgSettings] = useState<TelegramSettings>(() => safeLoad('tgSettings', { botToken: '', channelId: '' }));
   const [kieSettings, setKieSettings] = useState<KieSettings>(() => safeLoad('kieSettings', { apiKey: '' }));
   const [openRouterSettings, setOpenRouterSettings] = useState<OpenRouterSettings>(() => safeLoad('openRouterSettings', { apiKey: '' }));
@@ -132,60 +142,70 @@ const App: React.FC = () => {
   };
 
   const checkApiKey = async () => {
-    const hasKey = await window.aistudio.hasSelectedApiKey();
-    if (!hasKey) {
-      await window.aistudio.openSelectKey();
-      return true; // Proceed anyway as per prompt race condition mitigation
-    }
+    try {
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await window.aistudio.openSelectKey();
+      }
+    } catch (e) {}
     return true;
   };
 
-  const handleRegenerateFullPost = async (post: CarouselPost) => {
-    if (settings.textService === 'google' || settings.imageService === 'google') await checkApiKey();
-    
-    const refinementInput = window.prompt(t.refinePromptLabel, "");
-    if (refinementInput === null) return; 
-    
-    if (!window.confirm(language === 'ru' ? 'Перегенерировать всё для этой темы?' : 'Refresh everything for this topic?')) return;
-    
-    setIsGenerating(true);
-    try {
-      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, status: 'processing', images: [], caption: '' } : p));
-      const result = await generateCarouselBatch(post.topic, settings, instructions, kieSettings, openRouterSettings, refinementInput);
-      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, ...result, status: 'completed' } : p));
-    } catch (err: any) {
-      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, status: 'failed' } : p));
-      alert(err.message);
-    } finally { setIsGenerating(false); }
+  // REGENERATION HANDLERS VIA MODAL
+  const openRefinement = (type: 'all' | 'text' | 'image', post: CarouselPost, imageId?: string, description?: string) => {
+    setRefinementText('');
+    setRefinementModal({
+      isOpen: true,
+      type,
+      targetPost: post,
+      targetImageId: imageId,
+      targetDescription: description
+    });
   };
 
-  const handleRegenerateCaption = async (post: CarouselPost) => {
-    if (settings.textService === 'google') await checkApiKey();
+  const confirmRefinement = async () => {
+    const { type, targetPost, targetImageId, targetDescription } = refinementModal;
+    if (!targetPost) return;
+    
+    setRefinementModal(prev => ({ ...prev, isOpen: false }));
+    const currentRefinement = refinementText.trim();
 
-    const refinementInput = window.prompt(t.refinePromptLabel, "");
-    if (refinementInput === null) return;
-
-    setIsRegeneratingText(true);
-    try {
-      const newCaption = await regeneratePostCaption(post.topic, post.images.map(img => img.description), settings, instructions, openRouterSettings, refinementInput);
-      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, caption: newCaption } : p));
-    } catch (err: any) { alert(err.message); } finally { setIsRegeneratingText(false); }
-  };
-
-  const handleRegenerateImage = async (post: CarouselPost, imageId: string, description: string) => {
-    if (settings.imageService === 'google') await checkApiKey();
-
-    const refinementInput = window.prompt(t.refinePromptLabel, "");
-    if (refinementInput === null) return;
-
-    setRegeneratingImageId(imageId);
-    try {
-      const newUrl = await regenerateSingleImage(description, settings, kieSettings, refinementInput);
-      setPosts(prev => prev.map(p => p.id === post.id ? {
-        ...p,
-        images: p.images.map(img => img.id === imageId ? { ...img, imageUrl: newUrl } : img)
-      } : p));
-    } catch (err: any) { alert(err.message); } finally { setRegeneratingImageId(null); }
+    if (type === 'all') {
+      setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, status: 'processing', images: [], caption: '' } : p));
+      setIsGenerating(true);
+      try {
+        if (settings.textService === 'google' || settings.imageService === 'google') await checkApiKey();
+        const result = await generateCarouselBatch(targetPost.topic, settings, instructions, kieSettings, openRouterSettings, currentRefinement);
+        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, ...result, status: 'completed' } : p));
+      } catch (err: any) {
+        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
+        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, status: 'failed' } : p));
+        alert(err.message);
+      } finally { setIsGenerating(false); }
+    } else if (type === 'text') {
+      setIsRegeneratingText(true);
+      try {
+        if (settings.textService === 'google') await checkApiKey();
+        const newCaption = await regeneratePostCaption(targetPost.topic, targetPost.images.map(img => img.description), settings, instructions, openRouterSettings, currentRefinement);
+        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, caption: newCaption } : p));
+      } catch (err: any) {
+        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
+        alert(err.message);
+      } finally { setIsRegeneratingText(false); }
+    } else if (type === 'image' && targetImageId && targetDescription) {
+      setRegeneratingImageId(targetImageId);
+      try {
+        if (settings.imageService === 'google') await checkApiKey();
+        const newUrl = await regenerateSingleImage(targetDescription, settings, kieSettings, currentRefinement);
+        setPosts(prev => prev.map(p => p.id === targetPost.id ? {
+          ...p,
+          images: p.images.map(img => img.id === targetImageId ? { ...img, imageUrl: newUrl } : img)
+        } : p));
+      } catch (err: any) {
+        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
+        alert(err.message);
+      } finally { setRegeneratingImageId(null); }
+    }
   };
 
   const handlePublish = async (post: CarouselPost) => {
@@ -351,7 +371,7 @@ const App: React.FC = () => {
                   <div className="flex flex-col md:flex-row items-start justify-between gap-6">
                     <h2 className="text-4xl font-black text-white tracking-tight">{activePost.topic}</h2>
                     <div className="flex flex-wrap gap-3">
-                      <button onClick={() => handleRegenerateFullPost(activePost)} disabled={isGenerating} className="px-5 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-700 transition-all disabled:opacity-50"><RotateCw className="w-4 h-4" /> {t.regenerateAll}</button>
+                      <button onClick={() => openRefinement('all', activePost)} disabled={isGenerating} className="px-5 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-700 transition-all disabled:opacity-50"><RotateCw className="w-4 h-4" /> {t.regenerateAll}</button>
                       <button onClick={() => handleDownloadAllAsZip(activePost)} disabled={isZipping} className="px-5 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-700 transition-all disabled:opacity-50">{isZipping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} ZIP</button>
                       <button onClick={() => handlePublish(activePost)} disabled={isPublishing} className="px-5 py-3 bg-blue-600 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20">{isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />} {t.publishTelegram}</button>
                     </div>
@@ -367,7 +387,7 @@ const App: React.FC = () => {
                              <p className="text-[11px] text-slate-300 font-medium leading-relaxed mb-4 line-clamp-4">{img.description}</p>
                              <div className="flex gap-3">
                                <button onClick={() => handleDownloadImage(img.imageUrl, i)} className="px-4 py-2 bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all"><Download className="w-3.5 h-3.5" /> {t.download}</button>
-                               <button onClick={() => handleRegenerateImage(activePost, img.id, img.description)} disabled={regeneratingImageId === img.id} className="px-4 py-2 bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all disabled:opacity-50">
+                               <button onClick={() => openRefinement('image', activePost, img.id, img.description)} disabled={regeneratingImageId === img.id} className="px-4 py-2 bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all disabled:opacity-50">
                                  {regeneratingImageId === img.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />} {t.regenerateImage}
                                </button>
                              </div>
@@ -382,7 +402,7 @@ const App: React.FC = () => {
                     <div className="lg:col-span-2 space-y-4">
                        <div className="flex items-center justify-between">
                           <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><TypeIcon className="w-4 h-4" /> {t.postContent}</h3>
-                          <button onClick={() => handleRegenerateCaption(activePost)} disabled={isRegeneratingText} className="text-[10px] font-bold text-blue-400 hover:text-blue-300 flex items-center gap-2 uppercase tracking-widest transition-all disabled:opacity-50">
+                          <button onClick={() => openRefinement('text', activePost)} disabled={isRegeneratingText} className="text-[10px] font-bold text-blue-400 hover:text-blue-300 flex items-center gap-2 uppercase tracking-widest transition-all disabled:opacity-50">
                             {isRegeneratingText ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCw className="w-3 h-3" />} {t.regenerateCaption}
                           </button>
                        </div>
@@ -460,6 +480,32 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
+
+      {/* REFINEMENT MODAL - REPLACES WINDOW.PROMPT */}
+      {refinementModal.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+           <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-lg p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+             <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 bg-blue-600/20 rounded-lg text-blue-500"><MessageSquare className="w-6 h-6" /></div>
+                <h3 className="text-xl font-bold">{t.refinePromptLabel}</h3>
+             </div>
+             <p className="text-xs text-slate-500 mb-4 uppercase font-bold tracking-widest">
+               Targeting: {refinementModal.type === 'all' ? 'FULL CAROUSEL' : refinementModal.type === 'text' ? 'POST CAPTION' : 'SINGLE IMAGE'}
+             </p>
+             <textarea 
+                value={refinementText} 
+                onChange={e => setRefinementText(e.target.value)}
+                autoFocus
+                placeholder="e.g. Make it more professional, change the colors to gold and black..." 
+                className="w-full h-32 bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none mb-6"
+             />
+             <div className="flex gap-4">
+                <button onClick={() => setRefinementModal({ isOpen: false, type: 'all', targetPost: null })} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
+                <button onClick={confirmRefinement} className="flex-1 py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-blue-600/20">Confirm</button>
+             </div>
+           </div>
+        </div>
+      )}
 
       {/* Admin Panel */}
       {showAdmin && (

@@ -99,7 +99,7 @@ export const regenerateSingleImage = async (
     const aiImage = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const imgRes = await aiImage.models.generateContent({
       model: settings.googleModel,
-      contents: { parts: [{ text: fullPrompt }] },
+      contents: [{ parts: [{ text: fullPrompt }] }],
       config: {
         imageConfig: {
           aspectRatio: settings.aspectRatio as any,
