@@ -5,7 +5,6 @@ import { GenerationSettings, KieSettings, OpenRouterSettings, SystemInstructions
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function extractJson(text: string) {
-  console.log("[Extraction] Input text:", text);
   try {
     return JSON.parse(text.trim());
   } catch (e) {
@@ -24,7 +23,7 @@ function extractJson(text: string) {
         return JSON.parse(candidate);
       } catch (e3) {}
     }
-    throw new Error(`Invalid JSON format. Model output: ${text.substring(0, 100)}...`);
+    throw new Error(`Invalid JSON. Output: ${text.substring(0, 100)}...`);
   }
 }
 
@@ -33,9 +32,7 @@ async function callOpenRouter(prompt: string, apiKey: string, model: string, sys
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": window.location.origin,
-      "X-Title": "Carousel Pro Nano"
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: model,
@@ -45,10 +42,7 @@ async function callOpenRouter(prompt: string, apiKey: string, model: string, sys
       ]
     })
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `OpenRouter Error ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`OpenRouter Error ${response.status}`);
   const data = await response.json();
   return data.choices?.[0]?.message?.content || "";
 }
@@ -66,19 +60,101 @@ async function callGeminiText(prompt: string, systemInstruction: string, json: b
   return response.text || "";
 }
 
+export const regeneratePostCaption = async (
+  topic: string,
+  imagePrompts: string[],
+  settings: GenerationSettings,
+  instructions: SystemInstructions,
+  openRouterSettings?: OpenRouterSettings,
+  refinement?: string
+) => {
+  let captionInput = `Topic: ${topic}. Slide contents:\n` + imagePrompts.map((p, i) => `${i+1}: ${p}`).join('\n');
+  if (refinement && refinement.trim() !== "") {
+    captionInput += `\n\nREFINEMENT INSTRUCTIONS FROM USER: ${refinement}. Please rewrite the caption incorporating this feedback.`;
+  }
+  
+  if (settings.textService === 'openrouter' && openRouterSettings?.apiKey) {
+    return await callOpenRouter(captionInput, openRouterSettings.apiKey, settings.openrouterModel, instructions.captionGenerator);
+  } else {
+    return await callGeminiText(captionInput, instructions.captionGenerator, false);
+  }
+};
+
+export const regenerateSingleImage = async (
+  originalPrompt: string,
+  settings: GenerationSettings,
+  kieSettings?: KieSettings,
+  refinement?: string
+) => {
+  const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
+  let fullPrompt = `${originalPrompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+  
+  if (refinement && refinement.trim() !== "") {
+    fullPrompt += ` USER REQUESTED CHANGES: ${refinement}. Ensure visual adjustments reflect this.`;
+  }
+  
+  const validRefImages = settings.referenceImages.filter(url => url.trim() !== '');
+
+  if (settings.imageService === 'google') {
+    const aiImage = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const imgRes = await aiImage.models.generateContent({
+      model: settings.googleModel,
+      contents: { parts: [{ text: fullPrompt }] },
+      config: {
+        imageConfig: {
+          aspectRatio: settings.aspectRatio as any,
+          ...(settings.googleModel === 'gemini-3-pro-image-preview' ? { imageSize: "1K" } : {})
+        }
+      }
+    });
+    const data = imgRes.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+    if (data) return `data:image/png;base64,${data}`;
+  } else if (settings.imageService === 'kie' && kieSettings?.apiKey) {
+    const kieInput: any = { prompt: fullPrompt, aspect_ratio: settings.aspectRatio, resolution: "1K" };
+    if (validRefImages.length > 0) kieInput.image_input = validRefImages;
+
+    const create = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${kieSettings.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: "nano-banana-pro", input: kieInput })
+    }).then(r => r.json());
+    
+    if (create.code === 200) {
+      // Increased timeout: 120 attempts * 4s = 480s (8 minutes)
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await sleep(4000);
+        const poll = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${create.data.taskId}`, { 
+          headers: { 'Authorization': `Bearer ${kieSettings.apiKey}` } 
+        }).then(r => r.json());
+        
+        if (poll.data?.state === 'success') {
+          const res = JSON.parse(poll.data.resultJson);
+          return res.resultUrls[0];
+        } else if (poll.data?.state === 'failed') {
+          throw new Error(`Kie job failed: ${poll.data.reason || 'Unknown error'}`);
+        }
+      }
+      throw new Error("Kie generation timed out (8 min limit reached)");
+    }
+  }
+  throw new Error("Generation failed");
+};
+
 export const generateCarouselBatch = async (
   topic: string,
   settings: GenerationSettings,
   instructions: SystemInstructions,
   kieSettings?: KieSettings,
-  openRouterSettings?: OpenRouterSettings
+  openRouterSettings?: OpenRouterSettings,
+  refinement?: string
 ) => {
-  console.log("[Service] Starting generation for:", topic);
-
-  // 1. Generate Image Prompts
-  const structurePrompt = `Create exactly ${settings.count} visual slide prompts in Russian for a carousel about: "${topic}". 
+  let structurePrompt = `Create exactly ${settings.count} visual slide prompts in Russian for a carousel about: "${topic}". 
   Format as JSON: { "prompts": ["Slide 1 visual description with text overlay content", "Slide 2..."] }. 
   Style: ${settings.style}. ${settings.customStylePrompt}`;
+  
+  if (refinement && refinement.trim() !== "") {
+    structurePrompt += `\n\nREFINEMENT REQUESTED: ${refinement}. Adjust the structure and slide contents accordingly.`;
+  }
   
   let promptsRaw: string;
   if (settings.textService === 'openrouter' && openRouterSettings?.apiKey) {
@@ -89,117 +165,42 @@ export const generateCarouselBatch = async (
   
   const promptsData = extractJson(promptsRaw);
   const imagePrompts: string[] = promptsData.prompts || [];
-  if (!imagePrompts.length) throw new Error("Prompt generation returned empty array.");
+  if (!imagePrompts.length) throw new Error("No prompts generated");
 
-  // 2. Generate Caption
-  const captionInput = `Topic: ${topic}. Slide contents:\n` + imagePrompts.map((p, i) => `${i+1}: ${p}`).join('\n');
-  let caption: string;
-  if (settings.textService === 'openrouter' && openRouterSettings?.apiKey) {
-    caption = await callOpenRouter(captionInput, openRouterSettings.apiKey, settings.openrouterModel, instructions.captionGenerator);
-  } else {
-    caption = await callGeminiText(captionInput, instructions.captionGenerator, false);
-  }
+  const captionPromise = regeneratePostCaption(topic, imagePrompts, settings, instructions, openRouterSettings, refinement);
 
-  // 3. Generate Images
-  const images: any[] = [];
-  const validRefImages = settings.referenceImages.filter(url => url.trim() !== '');
-
-  for (let i = 0; i < imagePrompts.length; i++) {
-    const fullPrompt = `${imagePrompts[i]}. Visual style: ${settings.style}. ${settings.customStylePrompt}. High quality, 4k, professional photography.`;
-    
+  const imagePromises = imagePrompts.map(async (prompt, i) => {
     try {
-      if (settings.imageService === 'google') {
-        const aiImage = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const imgRes = await aiImage.models.generateContent({
-          model: settings.googleModel,
-          contents: { parts: [{ text: fullPrompt }] },
-          config: {
-            imageConfig: {
-              aspectRatio: settings.aspectRatio as any,
-              ...(settings.googleModel === 'gemini-3-pro-image-preview' ? { imageSize: "1K" } : {})
-            }
-          }
-        });
-        const data = imgRes.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-        if (data) images.push({ 
-          id: Math.random().toString(36).substr(2, 9), 
-          imageUrl: `data:image/png;base64,${data}`, 
-          description: imagePrompts[i] 
-        });
-      } else if (settings.imageService === 'kie' && kieSettings?.apiKey) {
-        const kieInput: any = { 
-          prompt: fullPrompt, 
-          aspect_ratio: settings.aspectRatio, 
-          resolution: "1K" 
-        };
-        
-        // Only include image_input if there are actual URLs
-        if (validRefImages.length > 0) {
-          kieInput.image_input = validRefImages;
-        }
-
-        const create = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${kieSettings.apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            model: "nano-banana-pro", 
-            input: kieInput 
-          })
-        }).then(r => r.json());
-        
-        if (create.code === 200) {
-          let url = '';
-          for (let attempt = 0; attempt < 30; attempt++) {
-            await sleep(4000);
-            const poll = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${create.data.taskId}`, { 
-              headers: { 'Authorization': `Bearer ${kieSettings.apiKey}` } 
-            }).then(r => r.json());
-            if (poll.data?.state === 'success') {
-              url = JSON.parse(poll.data.resultJson).resultUrls[0];
-              break;
-            }
-          }
-          if (url) images.push({ 
-            id: Math.random().toString(36).substr(2, 9), 
-            imageUrl: url, 
-            description: imagePrompts[i] 
-          });
-        }
-      }
+      const url = await regenerateSingleImage(prompt, settings, kieSettings, refinement);
+      return { id: Math.random().toString(36).substr(2, 9), imageUrl: url, description: prompt };
     } catch (err) {
-      console.error(`Image ${i} generation failed:`, err);
+      console.error(`Slide ${i} failed:`, err);
+      return null;
     }
-  }
+  });
+
+  const [caption, ...imageResults] = await Promise.all([captionPromise, ...imagePromises]);
+  const images = imageResults.filter((img): img is any => img !== null);
+
+  if (images.length === 0) throw new Error("All image generations failed.");
 
   return { images, caption };
 };
 
 export const publishToTelegram = async (images: string[], caption: string, settings: TelegramSettings) => {
-  if (!settings.botToken || !settings.channelId) throw new Error("Telegram credentials missing");
-
+  if (!settings.botToken || !settings.channelId) throw new Error("Credentials missing");
   const media = images.map((url, idx) => ({
     type: 'photo',
-    media: url.startsWith('data:') ? url : url, 
+    media: url, 
     caption: idx === 0 ? caption : undefined,
     parse_mode: 'HTML'
   }));
-
-  const remoteOnlyMedia = media.filter(m => !m.media.startsWith('data:'));
-  
-  if (remoteOnlyMedia.length === 0 && images.length > 0) {
-     throw new Error("Base64 images cannot be sent via simple JSON. Use Kie.ai or host images to use Telegram publishing.");
-  }
-
   const response = await fetch(`https://api.telegram.org/bot${settings.botToken}/sendMediaGroup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: settings.channelId,
-      media: remoteOnlyMedia
-    })
+    body: JSON.stringify({ chat_id: settings.channelId, media })
   });
-
   const resData = await response.json();
-  if (!resData.ok) throw new Error(resData.description || "Telegram API Error");
+  if (!resData.ok) throw new Error(resData.description || "TG Error");
   return true;
 };
