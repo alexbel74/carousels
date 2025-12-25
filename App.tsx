@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Send, Image as ImageIcon, Trash2, CheckCircle, Loader2,
-  Layout, Type as TypeIcon, Globe, ShieldCheck, X, Zap, Sparkles, Cloud, Server, Cpu, AlertCircle, Share2, Link as LinkIcon, Download, RotateCw, Calendar, Clock, MessageSquare
+  Layout, Type as TypeIcon, Globe, ShieldCheck, X, Zap, Sparkles, Cloud, Server, Cpu, AlertCircle, Share2, Link as LinkIcon, Download, RotateCw, Calendar, Clock, MessageSquare, AlertTriangle
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { CarouselPost, GenerationSettings, AppState, Language, TelegramSettings, KieSettings, OpenRouterSettings, SystemInstructions } from './types';
@@ -37,13 +37,13 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.API_KEY_REQUIRED);
   const [language, setLanguage] = useState<Language>(() => (localStorage.getItem('lang') as Language) || 'ru');
   const [showAdmin, setShowAdmin] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [adminStatus, setAdminStatus] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isZipping, setIsZipping] = useState(false);
   const [isRegeneratingText, setIsRegeneratingText] = useState(false);
   const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
   
-  // Custom Modal State for Refinement
+  // Custom Modal States
   const [refinementModal, setRefinementModal] = useState<{
     isOpen: boolean;
     type: 'all' | 'text' | 'image';
@@ -52,7 +52,11 @@ const App: React.FC = () => {
     targetDescription?: string;
   }>({ isOpen: false, type: 'all', targetPost: null });
   const [refinementText, setRefinementText] = useState('');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showSingleDeleteConfirm, setShowSingleDeleteConfirm] = useState(false);
+  const [postToDeleteId, setPostToDeleteId] = useState<string | null>(null);
 
+  // Settings State (Persisted)
   const [tgSettings, setTgSettings] = useState<TelegramSettings>(() => safeLoad('tgSettings', { botToken: '', channelId: '' }));
   const [kieSettings, setKieSettings] = useState<KieSettings>(() => safeLoad('kieSettings', { apiKey: '' }));
   const [openRouterSettings, setOpenRouterSettings] = useState<OpenRouterSettings>(() => safeLoad('openRouterSettings', { apiKey: '' }));
@@ -80,6 +84,17 @@ const App: React.FC = () => {
 
   const t = translations[language] || translations['en'];
 
+  // Sync with LocalStorage
+  useEffect(() => {
+    localStorage.setItem('lang', language);
+    localStorage.setItem('carouselHistory', JSON.stringify(posts));
+    localStorage.setItem('generationSettings', JSON.stringify(settings));
+    localStorage.setItem('tgSettings', JSON.stringify(tgSettings));
+    localStorage.setItem('kieSettings', JSON.stringify(kieSettings));
+    localStorage.setItem('openRouterSettings', JSON.stringify(openRouterSettings));
+    localStorage.setItem('systemInstructions', JSON.stringify(instructions));
+  }, [language, posts, settings, tgSettings, kieSettings, openRouterSettings, instructions]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -89,19 +104,15 @@ const App: React.FC = () => {
     })();
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('lang', language);
-    localStorage.setItem('carouselHistory', JSON.stringify(posts));
-    localStorage.setItem('generationSettings', JSON.stringify(settings));
-  }, [language, posts, settings]);
-
   const saveAdminSettings = () => {
-    localStorage.setItem('tgSettings', JSON.stringify(tgSettings));
-    localStorage.setItem('kieSettings', JSON.stringify(kieSettings));
-    localStorage.setItem('openRouterSettings', JSON.stringify(openRouterSettings));
-    localStorage.setItem('systemInstructions', JSON.stringify(instructions));
-    alert(t.settingsSaved);
-    setShowAdmin(false);
+    setAdminStatus('SAVING...');
+    setTimeout(() => {
+      setAdminStatus('SETTINGS SAVED!');
+      setTimeout(() => {
+        setAdminStatus(null);
+        setShowAdmin(false);
+      }, 1500);
+    }, 500);
   };
 
   const handleDownloadImage = (url: string, index: number) => {
@@ -138,7 +149,10 @@ const App: React.FC = () => {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    } catch (err) { alert("Zip failed. Check connection."); } finally { setIsZipping(false); }
+    } catch (err) { 
+      setAdminStatus("ZIP FAILED. CHECK NETWORK.");
+      setTimeout(() => setAdminStatus(null), 3000);
+    } finally { setIsZipping(false); }
   };
 
   const checkApiKey = async () => {
@@ -151,7 +165,6 @@ const App: React.FC = () => {
     return true;
   };
 
-  // REGENERATION HANDLERS VIA MODAL
   const openRefinement = (type: 'all' | 'text' | 'image', post: CarouselPost, imageId?: string, description?: string) => {
     setRefinementText('');
     setRefinementModal({
@@ -180,7 +193,8 @@ const App: React.FC = () => {
       } catch (err: any) {
         if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
         setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, status: 'failed' } : p));
-        alert(err.message);
+        setAdminStatus(err.message);
+        setTimeout(() => setAdminStatus(null), 5000);
       } finally { setIsGenerating(false); }
     } else if (type === 'text') {
       setIsRegeneratingText(true);
@@ -190,7 +204,8 @@ const App: React.FC = () => {
         setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, caption: newCaption } : p));
       } catch (err: any) {
         if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
-        alert(err.message);
+        setAdminStatus(err.message);
+        setTimeout(() => setAdminStatus(null), 5000);
       } finally { setIsRegeneratingText(false); }
     } else if (type === 'image' && targetImageId && targetDescription) {
       setRegeneratingImageId(targetImageId);
@@ -203,18 +218,23 @@ const App: React.FC = () => {
         } : p));
       } catch (err: any) {
         if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
-        alert(err.message);
+        setAdminStatus(err.message);
+        setTimeout(() => setAdminStatus(null), 5000);
       } finally { setRegeneratingImageId(null); }
     }
   };
 
   const handlePublish = async (post: CarouselPost) => {
-    if (!tgSettings.botToken || !tgSettings.channelId) { alert(t.missingTelegram); setShowAdmin(true); return; }
+    if (!tgSettings.botToken || !tgSettings.channelId) { setShowAdmin(true); return; }
     setIsPublishing(true);
     try {
       await publishToTelegram(post.images.map(i => i.imageUrl), post.caption, tgSettings);
-      alert(t.publishSuccess);
-    } catch (err: any) { alert(t.publishError + ": " + err.message); } finally { setIsPublishing(false); }
+      setAdminStatus(t.publishSuccess);
+      setTimeout(() => setAdminStatus(null), 3000);
+    } catch (err: any) { 
+      setAdminStatus(t.publishError + ": " + err.message);
+      setTimeout(() => setAdminStatus(null), 5000);
+    } finally { setIsPublishing(false); }
   };
 
   const startGeneration = async () => {
@@ -235,10 +255,26 @@ const App: React.FC = () => {
         setPosts(prev => prev.map(p => p.id === post.id ? { ...p, ...result, status: 'completed' } : p));
       } catch (err: any) {
         setPosts(prev => prev.map(p => p.id === post.id ? { ...p, status: 'failed' } : p));
-        setErrorMessage(err.message);
+        setAdminStatus(err.message);
+        setTimeout(() => setAdminStatus(null), 5000);
       }
     }
     setIsGenerating(false);
+  };
+
+  const handleDeletePost = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setPostToDeleteId(id);
+    setShowSingleDeleteConfirm(true);
+  };
+
+  const confirmDeleteSinglePost = () => {
+    if (postToDeleteId) {
+      setPosts(prev => prev.filter(p => p.id !== postToDeleteId));
+      if (activePostId === postToDeleteId) setActivePostId(null);
+    }
+    setShowSingleDeleteConfirm(false);
+    setPostToDeleteId(null);
   };
 
   const activePost = posts.find(p => p.id === activePostId);
@@ -272,8 +308,6 @@ const App: React.FC = () => {
 
           <section className="space-y-4 pt-4 border-t border-slate-800">
             <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.carouselSettings}</label>
-            
-            {/* Провайдеры */}
             <div className="space-y-3">
                <div>
                   <label className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 block">{t.textService}</label>
@@ -290,7 +324,6 @@ const App: React.FC = () => {
                   </div>
                </div>
             </div>
-
             <div className="grid grid-cols-2 gap-3">
                <div className="space-y-1">
                  <label className="text-[10px] text-slate-500 uppercase font-bold">{t.imageCount}: {settings.count}</label>
@@ -306,19 +339,16 @@ const App: React.FC = () => {
                  </select>
                </div>
             </div>
-
             <div className="space-y-1">
               <label className="text-[10px] text-slate-500 uppercase font-bold">{t.baseStyle}</label>
               <select value={settings.style} onChange={e => setSettings({...settings, style: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-2 text-[11px] outline-none focus:ring-1 focus:ring-blue-500">
                 {STYLES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            
             <div className="space-y-1">
               <label className="text-[10px] text-slate-600 font-bold uppercase">{t.extraPromptLabel}</label>
               <textarea value={settings.customStylePrompt} onChange={e => setSettings({...settings, customStylePrompt: e.target.value})} placeholder={t.styleDetailsPlaceholder} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-[10px] h-16 resize-none outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
-
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.referenceImagesLabel}</label>
               {settings.referenceImages.map((url, idx) => (
@@ -354,7 +384,7 @@ const App: React.FC = () => {
               </button>
             ))}
           </div>
-          {posts.length > 0 && <button onClick={() => {if(confirm(t.confirmClear)) setPosts([]);}} className="text-[10px] font-bold text-slate-600 hover:text-red-400 uppercase tracking-widest transition-colors">{t.clearHistory}</button>}
+          {posts.length > 0 && <button onClick={() => setShowClearConfirm(true)} className="text-[10px] font-bold text-slate-600 hover:text-red-400 uppercase tracking-widest transition-colors">{t.clearHistory}</button>}
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-10">
@@ -376,7 +406,6 @@ const App: React.FC = () => {
                       <button onClick={() => handlePublish(activePost)} disabled={isPublishing} className="px-5 py-3 bg-blue-600 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20">{isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />} {t.publishTelegram}</button>
                     </div>
                   </div>
-
                   <div className="space-y-4">
                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><ImageIcon className="w-4 h-4" /> {t.visualSequence}</h3>
                     <div className="flex overflow-x-auto pb-6 gap-6 snap-x no-scrollbar">
@@ -397,7 +426,6 @@ const App: React.FC = () => {
                       ))}
                     </div>
                   </div>
-
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
                     <div className="lg:col-span-2 space-y-4">
                        <div className="flex items-center justify-between">
@@ -438,22 +466,27 @@ const App: React.FC = () => {
                    </div>
                 )}
               </div>
-
               {posts.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {posts.map(post => (
                     <div 
                       key={post.id} 
                       onClick={() => setActivePostId(post.id)}
-                      className="group bg-slate-900/40 border border-slate-800 rounded-[32px] p-6 cursor-pointer hover:border-blue-500/50 hover:bg-slate-900/60 transition-all flex flex-col gap-4 shadow-sm hover:shadow-xl hover:shadow-blue-500/5"
+                      className="group bg-slate-900/40 border border-slate-800 rounded-[32px] p-6 cursor-pointer hover:border-blue-500/50 hover:bg-slate-900/60 transition-all flex flex-col gap-4 shadow-sm hover:shadow-xl hover:shadow-blue-500/5 relative"
                     >
+                      <button 
+                        onClick={(e) => handleDeletePost(e, post.id)} 
+                        className="absolute top-4 right-4 p-2 bg-slate-800/80 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-full opacity-0 group-hover:opacity-100 transition-all z-10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                       <div className="flex items-center justify-between">
                         <div className={`w-3 h-3 rounded-full ${post.status === 'completed' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.4)]' : post.status === 'failed' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : 'bg-slate-600 animate-pulse'}`} />
                         <span className="text-[10px] font-bold text-slate-600 uppercase tracking-tighter flex items-center gap-1">
                           <Clock className="w-3 h-3" /> {new Date(post.timestamp).toLocaleDateString()}
                         </span>
                       </div>
-                      <h3 className="text-lg font-bold text-slate-200 line-clamp-2 group-hover:text-white transition-colors">{post.topic}</h3>
+                      <h3 className="text-lg font-bold text-slate-200 line-clamp-2 group-hover:text-white transition-colors pr-8">{post.topic}</h3>
                       <div className="mt-auto flex items-center justify-between text-[10px] font-black text-slate-500 uppercase tracking-widest">
                          <div className="flex items-center gap-1.5"><ImageIcon className="w-3 h-3" /> {post.images.length} {t.images}</div>
                          <div className="text-blue-500 group-hover:translate-x-1 transition-transform">{t.viewPost} →</div>
@@ -481,7 +514,7 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* REFINEMENT MODAL - REPLACES WINDOW.PROMPT */}
+      {/* REFINEMENT MODAL */}
       {refinementModal.isOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
            <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-lg p-8 shadow-2xl animate-in zoom-in-95 duration-200">
@@ -507,6 +540,40 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* CLEAR HISTORY CONFIRM MODAL */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="p-4 bg-red-600/20 rounded-full text-red-500 mb-2"><AlertTriangle className="w-10 h-10" /></div>
+              <h3 className="text-xl font-bold">{t.clearHistory}</h3>
+              <p className="text-sm text-slate-400">{t.confirmClear}</p>
+            </div>
+            <div className="flex gap-4 mt-8">
+              <button onClick={() => setShowClearConfirm(false)} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
+              <button onClick={() => { setPosts([]); setShowClearConfirm(false); setActivePostId(null); }} className="flex-1 py-4 bg-red-600 hover:bg-red-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-red-600/20">Clear All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE SINGLE POST CONFIRM MODAL */}
+      {showSingleDeleteConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="p-4 bg-red-600/20 rounded-full text-red-500 mb-2"><Trash2 className="w-10 h-10" /></div>
+              <h3 className="text-xl font-bold">{t.deletePost}</h3>
+              <p className="text-sm text-slate-400">{t.confirmDeletePost}</p>
+            </div>
+            <div className="flex gap-4 mt-8">
+              <button onClick={() => setShowSingleDeleteConfirm(false)} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
+              <button onClick={confirmDeleteSinglePost} className="flex-1 py-4 bg-red-600 hover:bg-red-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-red-600/20">Delete Post</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Admin Panel */}
       {showAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
@@ -515,6 +582,11 @@ const App: React.FC = () => {
                <h3 className="text-3xl font-black flex items-center gap-4"><ShieldCheck className="w-8 h-8 text-indigo-500" /> {t.adminPanel}</h3>
                <button onClick={() => setShowAdmin(false)} className="p-3 hover:bg-slate-800 rounded-full transition-all text-slate-500"><X className="w-7 h-7" /></button>
             </div>
+            {adminStatus && (
+              <div className="mb-6 p-4 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl flex items-center gap-3 text-indigo-300 font-bold text-xs uppercase tracking-widest animate-pulse">
+                <Info className="w-4 h-4" /> {adminStatus}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
               <div className="space-y-8">
                 <div className="space-y-4">
@@ -544,8 +616,21 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+      
+      {/* Toast Overlay for Global Status Messages */}
+      {adminStatus && !showAdmin && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 border border-indigo-500/50 px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-300">
+          <Zap className="w-5 h-5 text-indigo-500 animate-pulse" />
+          <span className="text-xs font-black uppercase tracking-widest text-white">{adminStatus}</span>
+        </div>
+      )}
     </div>
   );
 };
+
+// Internal utility for icons in App component
+const Info = (props: any) => (
+  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+);
 
 export default App;
