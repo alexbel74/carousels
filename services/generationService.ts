@@ -47,8 +47,8 @@ async function callOpenRouter(prompt: string, apiKey: string, model: string, sys
   return data.choices?.[0]?.message?.content || "";
 }
 
-async function callGeminiText(prompt: string, systemInstruction: string, json: boolean = false) {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+async function callGeminiText(prompt: string, systemInstruction: string, googleApiKey: string, json: boolean = false) {
+  const ai = new GoogleGenAI({ apiKey: googleApiKey || process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
     contents: prompt,
@@ -66,6 +66,7 @@ export const regeneratePostCaption = async (
   settings: GenerationSettings,
   instructions: SystemInstructions,
   openRouterSettings?: OpenRouterSettings,
+  googleApiKey: string = "",
   refinement?: string
 ) => {
   let captionInput = `Topic: ${topic}. Slide contents:\n` + imagePrompts.map((p, i) => `${i+1}: ${p}`).join('\n');
@@ -76,18 +77,24 @@ export const regeneratePostCaption = async (
   if (settings.textService === 'openrouter' && openRouterSettings?.apiKey) {
     return await callOpenRouter(captionInput, openRouterSettings.apiKey, settings.openrouterModel, instructions.captionGenerator);
   } else {
-    return await callGeminiText(captionInput, instructions.captionGenerator, false);
+    return await callGeminiText(captionInput, instructions.captionGenerator, googleApiKey, false);
   }
 };
 
 export const regenerateSingleImage = async (
-  originalPrompt: string,
+  prompt: string,
   settings: GenerationSettings,
   kieSettings?: KieSettings,
-  refinement?: string
+  googleApiKey: string = "",
+  refinement?: string,
+  useRawPrompt: boolean = false
 ) => {
-  const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
-  let fullPrompt = `${originalPrompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+  let fullPrompt = prompt;
+  
+  if (!useRawPrompt) {
+    const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
+    fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+  }
   
   if (refinement && refinement.trim() !== "") {
     fullPrompt += ` USER REQUESTED CHANGES: ${refinement}. Ensure visual adjustments reflect this.`;
@@ -96,7 +103,7 @@ export const regenerateSingleImage = async (
   const validRefImages = settings.referenceImages.filter(url => url.trim() !== '');
 
   if (settings.imageService === 'google') {
-    const aiImage = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const aiImage = new GoogleGenAI({ apiKey: googleApiKey || process.env.API_KEY });
     const imgRes = await aiImage.models.generateContent({
       model: settings.googleModel,
       contents: [{ parts: [{ text: fullPrompt }] }],
@@ -146,8 +153,15 @@ export const generateCarouselBatch = async (
   instructions: SystemInstructions,
   kieSettings?: KieSettings,
   openRouterSettings?: OpenRouterSettings,
-  refinement?: string
+  googleApiKey: string = "",
+  refinement?: string,
+  onProgress?: (status: string) => void,
+  statusMessages?: { structure: string, caption: string, slide: string }
 ) => {
+  const msgs = statusMessages || { structure: "Generating structure...", caption: "Generating caption...", slide: "Starting slide" };
+  
+  if (onProgress) onProgress(`${msgs.structure}: ${topic}...`);
+  
   let structurePrompt = `Create exactly ${settings.count} visual slide prompts in Russian for a carousel about: "${topic}". 
   Format as JSON: { "prompts": ["Slide 1 visual description with text overlay content", "Slide 2..."] }. 
   Style: ${settings.style}. ${settings.customStylePrompt}`;
@@ -160,19 +174,33 @@ export const generateCarouselBatch = async (
   if (settings.textService === 'openrouter' && openRouterSettings?.apiKey) {
     promptsRaw = await callOpenRouter(structurePrompt, openRouterSettings.apiKey, settings.openrouterModel, instructions.imageGenerator);
   } else {
-    promptsRaw = await callGeminiText(structurePrompt, instructions.imageGenerator, true);
+    promptsRaw = await callGeminiText(structurePrompt, instructions.imageGenerator, googleApiKey, true);
   }
   
   const promptsData = extractJson(promptsRaw);
   const imagePrompts: string[] = promptsData.prompts || [];
   if (!imagePrompts.length) throw new Error("No prompts generated");
 
-  const captionPromise = regeneratePostCaption(topic, imagePrompts, settings, instructions, openRouterSettings, refinement);
+  if (onProgress) onProgress(msgs.caption);
+  const captionPromise = regeneratePostCaption(topic, imagePrompts, settings, instructions, openRouterSettings, googleApiKey, refinement);
 
   const imagePromises = imagePrompts.map(async (prompt, i) => {
     try {
-      const url = await regenerateSingleImage(prompt, settings, kieSettings, refinement);
-      return { id: Math.random().toString(36).substr(2, 9), imageUrl: url, description: prompt };
+      if (onProgress) onProgress(`${msgs.slide} ${i + 1}/${imagePrompts.length}...`);
+      
+      // Construct the full prompt here to save it in history
+      const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
+      const fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+      
+      // Pass the full prompt and set useRawPrompt to true
+      const url = await regenerateSingleImage(fullPrompt, settings, kieSettings, googleApiKey, refinement, true);
+      
+      return { 
+        id: Math.random().toString(36).substr(2, 9), 
+        imageUrl: url, 
+        description: prompt,
+        fullPrompt: fullPrompt 
+      };
     } catch (err) {
       console.error(`Slide ${i} failed:`, err);
       return null;

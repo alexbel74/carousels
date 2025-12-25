@@ -1,636 +1,860 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Plus, Send, Image as ImageIcon, Trash2, CheckCircle, Loader2,
-  Layout, Type as TypeIcon, Globe, ShieldCheck, X, Zap, Sparkles, Cloud, Server, Cpu, AlertCircle, Share2, Link as LinkIcon, Download, RotateCw, Calendar, Clock, MessageSquare, AlertTriangle
+  Layout, User as UserIcon, LogOut, Mail, Lock, Send, Trash2, Loader2, ShieldCheck, X, Users, Zap, Image as ImageIcon, Settings2, Sparkles, Cpu, Globe, Key, MessageSquare, Terminal, Download, RefreshCw, ChevronLeft, ExternalLink, Share2, Ban, CheckCircle, Maximize2, FileText
 } from 'lucide-react';
 import JSZip from 'jszip';
-import { CarouselPost, GenerationSettings, AppState, Language, TelegramSettings, KieSettings, OpenRouterSettings, SystemInstructions } from './types';
-import { generateCarouselBatch, publishToTelegram, regeneratePostCaption, regenerateSingleImage } from './services/generationService';
+import { CarouselPost, GenerationSettings, Language, User, KieSettings, OpenRouterSettings, SystemInstructions, TelegramSettings, CarouselItem, GoogleSettings } from './types';
 import { translations } from './translations';
+import { generateCarouselBatch, regenerateSingleImage, regeneratePostCaption, publishToTelegram } from './services/generationService';
 import { defaultImagePromptGenerator, defaultCaptionGenerator } from './defaultPrompts';
 
 const STYLES = [
-  'None / Custom', 'Cinematic Photorealistic', 'Minimalist Vector Art', 'Cyberpunk Neon', 
-  'Soft Pastel Watercolor', '3D Isometric Render', 'Analog Film 35mm', 'Dark Academia', 
-  'Surreal Collage', 'Vintage Soviet Poster', 'Ghibli Anime Style', 'Hyper-Realistic 8k',
-  'Pencil Charcoal Sketch', 'Double Exposure Art', 'Vaporwave Aesthetic', 'Claymation / Plasticine',
-  'Futuristic UI Glassmorphism', 'Noir Monochrome', 'Renaissance Oil Painting', 'Abstract Memphis',
-  'Bauhaus Geometric', 'Glitch Art', 'Pop Art Warhol', 'Gothic Dark Fantasy', 'Steampunk Victorian',
-  'Infographic Flat Design', 'Ukiyo-e Japanese Woodblock', 'Graffiti Street Art', 'Stained Glass'
+  'None / Custom', 
+  'Cinematic Photorealistic', 
+  'Cyberpunk Neon', 
+  '3D Isometric Render', 
+  'Minimalist Vector Art', 
+  'Vintage Soviet Poster', 
+  'Ghibli Anime Style',
+  'Dark Academia Noir',
+  'Futuristic Apple Aesthetic',
+  'Surreal Dreamscape',
+  'Ukiyo-e Woodblock Print',
+  '90s Retro VHS',
+  'Luxury Gold & Marble',
+  'Abstract Liquid Gradient',
+  'Synthwave Retro',
+  'Claymation / Stop Motion',
+  'Hyper-Realistic Blueprint',
+  'National Geographic Nature',
+  'Pop Art Andy Warhol'
 ];
 
-const OPENROUTER_MODELS = [
-  'openai/gpt-4.1-mini', 'openai/gpt-4.1', 'openai/gpt-5', 'openai/gpt-5.1',
-  'anthropic/claude-sonnet-4.5', 'anthropic/claude-3.7-sonnet', 'google/gemini-2.5-pro',
-  'google/gemini-3-flash-preview', 'google/gemini-3-pro-preview'
+const OPEN_ROUTER_MODELS = [
+  'openai/gpt-4.1-mini',
+  'openai/gpt-4.1',
+  'openai/gpt-5',
+  'openai/gpt-5.1',
+  'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-sonnet-4',
+  'anthropic/claude-3.7-sonnet',
+  'anthropic/claude-opus-4.1',
+  'anthropic/claude-opus-4.5',
+  'anthropic/claude-haiku-4.5',
+  'google/gemini-2.5-flash',
+  'google/gemini-2.5-pro',
+  'google/gemini-3-flash-preview',
+  'google/gemini-3-pro-preview'
 ];
 
-const safeLoad = (key: string, defaultValue: any) => {
-  try {
-    const saved = localStorage.getItem(key);
-    return saved ? JSON.parse(saved) : defaultValue;
-  } catch (e) { return defaultValue; }
+// --- DEFAULTS ---
+const DEFAULT_GEN_SETTINGS: GenerationSettings = {
+  textService: 'google', 
+  imageService: 'google', 
+  googleModel: 'gemini-3-pro-image-preview',
+  openrouterModel: OPEN_ROUTER_MODELS[0], 
+  count: 5, 
+  style: STYLES[0],
+  aspectRatio: '1:1', 
+  customStylePrompt: '', 
+  referenceImages: ['', '', '']
+};
+
+const DEFAULT_KIE: KieSettings = { apiKey: '' };
+const DEFAULT_GOOGLE: GoogleSettings = { apiKey: '' };
+const DEFAULT_OR: OpenRouterSettings = { apiKey: '' };
+const DEFAULT_TG: TelegramSettings = { botToken: '', channelId: '' };
+const DEFAULT_INSTRUCTIONS: SystemInstructions = {
+  imageGenerator: defaultImagePromptGenerator,
+  captionGenerator: defaultCaptionGenerator
 };
 
 const App: React.FC = () => {
-  const [appState, setAppState] = useState<AppState>(AppState.API_KEY_REQUIRED);
+  // --- AUTH & NAV ---
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = sessionStorage.getItem('currentUser');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [view, setView] = useState<'dashboard' | 'generator' | 'api_keys' | 'prompts' | 'profile' | 'admin_users'>('dashboard');
+  const [selectedPost, setSelectedPost] = useState<CarouselPost | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [language, setLanguage] = useState<Language>(() => (localStorage.getItem('lang') as Language) || 'ru');
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [adminStatus, setAdminStatus] = useState<string | null>(null);
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [isZipping, setIsZipping] = useState(false);
-  const [isRegeneratingText, setIsRegeneratingText] = useState(false);
-  const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
-  
-  // Custom Modal States
-  const [refinementModal, setRefinementModal] = useState<{
-    isOpen: boolean;
-    type: 'all' | 'text' | 'image';
-    targetPost: CarouselPost | null;
-    targetImageId?: string;
-    targetDescription?: string;
-  }>({ isOpen: false, type: 'all', targetPost: null });
-  const [refinementText, setRefinementText] = useState('');
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [showSingleDeleteConfirm, setShowSingleDeleteConfirm] = useState(false);
-  const [postToDeleteId, setPostToDeleteId] = useState<string | null>(null);
-
-  // Settings State (Persisted)
-  const [tgSettings, setTgSettings] = useState<TelegramSettings>(() => safeLoad('tgSettings', { botToken: '', channelId: '' }));
-  const [kieSettings, setKieSettings] = useState<KieSettings>(() => safeLoad('kieSettings', { apiKey: '' }));
-  const [openRouterSettings, setOpenRouterSettings] = useState<OpenRouterSettings>(() => safeLoad('openRouterSettings', { apiKey: '' }));
-  const [instructions, setInstructions] = useState<SystemInstructions>(() => safeLoad('systemInstructions', { 
-    imageGenerator: defaultImagePromptGenerator, 
-    captionGenerator: defaultCaptionGenerator 
-  }));
-
-  const [topics, setTopics] = useState<string[]>(['']);
-  const [settings, setSettings] = useState<GenerationSettings>(() => safeLoad('generationSettings', {
-    textService: 'google',
-    imageService: 'google',
-    googleModel: 'gemini-3-pro-image-preview',
-    openrouterModel: OPENROUTER_MODELS[0],
-    count: 5,
-    style: STYLES[0],
-    aspectRatio: '1:1',
-    customStylePrompt: '',
-    referenceImages: ['']
-  }));
-  
-  const [posts, setPosts] = useState<CarouselPost[]>(() => safeLoad('carouselHistory', []));
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [activePostId, setActivePostId] = useState<string | null>(null);
-
   const t = translations[language] || translations['en'];
 
-  // Sync with LocalStorage
+  // --- PERSISTENCE ---
+  const uKey = (key: string) => currentUser ? `user_${currentUser.id}_${key}` : `guest_${key}`;
+  const load = (key: string, def: any) => {
+    const s = localStorage.getItem(uKey(key));
+    return s ? JSON.parse(s) : def;
+  };
+  const save = (key: string, val: any) => localStorage.setItem(uKey(key), JSON.stringify(val));
+
+  // --- USER DATA ---
+  const [posts, setPosts] = useState<CarouselPost[]>([]);
+  const [topics, setTopics] = useState<string[]>(['']);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  // Initialize with load checking localStorage, or falling back to CONSTANT DEFAULTS
+  const [settings, setSettings] = useState<GenerationSettings>(() => load('genSettings', DEFAULT_GEN_SETTINGS));
+  const [kieSettings, setKieSettings] = useState<KieSettings>(() => load('kieSettings', DEFAULT_KIE));
+  const [googleSettings, setGoogleSettings] = useState<GoogleSettings>(() => load('googleSettings', DEFAULT_GOOGLE));
+  const [openRouterSettings, setOpenRouterSettings] = useState<OpenRouterSettings>(() => load('orSettings', DEFAULT_OR));
+  const [tgSettings, setTgSettings] = useState<TelegramSettings>(() => load('tgSettings', DEFAULT_TG));
+  const [instructions, setInstructions] = useState<SystemInstructions>(() => load('instructions', DEFAULT_INSTRUCTIONS));
+
+  const [authForm, setAuthForm] = useState({ user: '', email: '', pass: '', confirm: '' });
+  const [currentPass, setCurrentPass] = useState('');
+  const [newPass, setNewPass] = useState('');
+
+  // --- MODAL STATES ---
+  const [refinementState, setRefinementState] = useState<{
+    isOpen: boolean;
+    type: 'slide' | 'caption' | null;
+    index: number | null;
+    value: string;
+  }>({ isOpen: false, type: null, index: null, value: '' });
+
+  const [promptViewState, setPromptViewState] = useState<{
+    isOpen: boolean;
+    prompt: string;
+  }>({ isOpen: false, prompt: '' });
+
+  const [confirmationState, setConfirmationState] = useState<{
+    isOpen: boolean;
+    message: string;
+    onConfirm: () => void;
+  }>({ isOpen: false, message: '', onConfirm: () => {} });
+
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+
+  // Sync effect: When user changes, reload ALL data with strict defaults if nothing is found
   useEffect(() => {
-    localStorage.setItem('lang', language);
-    localStorage.setItem('carouselHistory', JSON.stringify(posts));
-    localStorage.setItem('generationSettings', JSON.stringify(settings));
-    localStorage.setItem('tgSettings', JSON.stringify(tgSettings));
-    localStorage.setItem('kieSettings', JSON.stringify(kieSettings));
-    localStorage.setItem('openRouterSettings', JSON.stringify(openRouterSettings));
-    localStorage.setItem('systemInstructions', JSON.stringify(instructions));
-  }, [language, posts, settings, tgSettings, kieSettings, openRouterSettings, instructions]);
+    if (currentUser) {
+      setPosts(load('carouselHistory', []));
+      setTopics(load('topics', [''])); // LOAD USER TOPICS
+      setSettings(load('genSettings', DEFAULT_GEN_SETTINGS));
+      setKieSettings(load('kieSettings', DEFAULT_KIE));
+      setGoogleSettings(load('googleSettings', DEFAULT_GOOGLE));
+      setOpenRouterSettings(load('orSettings', DEFAULT_OR));
+      setTgSettings(load('tgSettings', DEFAULT_TG));
+      setInstructions(load('instructions', DEFAULT_INSTRUCTIONS));
+    } else {
+      // If no user (logout), reset to defaults to clear UI
+      setPosts([]);
+      setTopics(['']); // RESET TOPICS
+      setSettings(DEFAULT_GEN_SETTINGS);
+      setKieSettings(DEFAULT_KIE);
+      setGoogleSettings(DEFAULT_GOOGLE);
+      setOpenRouterSettings(DEFAULT_OR);
+      setTgSettings(DEFAULT_TG);
+      setInstructions(DEFAULT_INSTRUCTIONS);
+    }
+  }, [currentUser]);
 
+  // Save effect: When data changes, save to the CURRENT user's storage
   useEffect(() => {
-    (async () => {
-      try {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        if (hasKey) setAppState(AppState.READY);
-      } catch (e) { console.error("API Key check failed", e); }
-    })();
-  }, []);
+    if (currentUser) {
+      save('carouselHistory', posts);
+      save('topics', topics); // SAVE USER TOPICS
+      save('genSettings', settings);
+      save('kieSettings', kieSettings);
+      save('googleSettings', googleSettings);
+      save('orSettings', openRouterSettings);
+      save('tgSettings', tgSettings);
+      save('instructions', instructions);
+    }
+  }, [posts, topics, settings, kieSettings, googleSettings, openRouterSettings, tgSettings, instructions, currentUser]);
 
-  const saveAdminSettings = () => {
-    setAdminStatus('SAVING...');
-    setTimeout(() => {
-      setAdminStatus('SETTINGS SAVED!');
-      setTimeout(() => {
-        setAdminStatus(null);
-        setShowAdmin(false);
-      }, 1500);
-    }, 500);
-  };
-
-  const handleDownloadImage = (url: string, index: number) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `slide-${index + 1}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleDownloadAllAsZip = async (post: CarouselPost) => {
-    if (post.images.length === 0) return;
-    setIsZipping(true);
-    try {
-      const zip = new JSZip();
-      const folderName = post.topic.replace(/[/\\?%*:|"<>]/g, '-').substring(0, 30);
-      const folder = zip.folder(folderName);
-      
-      const promises = post.images.map(async (img, idx) => {
-        try {
-          const response = await fetch(img.imageUrl, { mode: 'cors', cache: 'no-cache', credentials: 'omit' });
-          if (!response.ok) throw new Error("Fetch failed");
-          const blob = await response.blob();
-          folder?.file(`slide-${idx + 1}.png`, blob);
-        } catch (e) { console.error(`Failed zip part ${idx}`, e); }
-      });
-      
-      await Promise.all(promises);
-      const content = await zip.generateAsync({ type: 'blob' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(content);
-      link.download = `${folderName}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch (err) { 
-      setAdminStatus("ZIP FAILED. CHECK NETWORK.");
-      setTimeout(() => setAdminStatus(null), 3000);
-    } finally { setIsZipping(false); }
-  };
-
-  const checkApiKey = async () => {
-    try {
-      const hasKey = await window.aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        await window.aistudio.openSelectKey();
+  // --- ACTIONS ---
+  const handleAuth = () => {
+    const db: User[] = JSON.parse(localStorage.getItem('users_db') || '[]');
+    if (authMode === 'register') {
+      if (!authForm.user || !authForm.email || !authForm.pass) { setStatus(t.fillAllFields); return; }
+      if (authForm.pass !== authForm.confirm) { setStatus(t.passwordsNoMatch); return; }
+      const newUser: User = { 
+        id: Math.random().toString(36).substr(2, 9), 
+        email: authForm.email, 
+        username: authForm.user, 
+        password: authForm.pass, 
+        role: db.length === 0 ? 'admin' : 'user', 
+        language, 
+        createdAt: Date.now(),
+        isBlocked: false
+      };
+      db.push(newUser); 
+      localStorage.setItem('users_db', JSON.stringify(db)); 
+      login(newUser);
+    } else {
+      const user = db.find(u => (u.email === authForm.user || u.username === authForm.user) && u.password === authForm.pass);
+      if (user) {
+        if (user.isBlocked) {
+          setStatus(t.blockedError);
+          return;
+        }
+        login(user);
+      } else {
+        setStatus(t.authError);
       }
-    } catch (e) {}
-    return true;
+    }
   };
 
-  const openRefinement = (type: 'all' | 'text' | 'image', post: CarouselPost, imageId?: string, description?: string) => {
-    setRefinementText('');
-    setRefinementModal({
-      isOpen: true,
-      type,
-      targetPost: post,
-      targetImageId: imageId,
-      targetDescription: description
+  const login = (user: User) => { setCurrentUser(user); sessionStorage.setItem('currentUser', JSON.stringify(user)); setStatus(null); setView('dashboard'); };
+  const logout = () => { setCurrentUser(null); sessionStorage.removeItem('currentUser'); setView('dashboard'); setAuthMode('login'); };
+
+  const handleGenerate = async () => {
+    const validTopics = topics.filter(t => t.trim() !== '');
+    if (validTopics.length === 0) { setStatus('Введите тему!'); return; }
+    setIsGenerating(true); setStatus(t.generating);
+    try {
+      const results = await Promise.all(validTopics.map(async (topic) => {
+        const res = await generateCarouselBatch(
+          topic, 
+          settings, 
+          instructions, 
+          kieSettings, 
+          openRouterSettings, 
+          googleSettings.apiKey,
+          undefined, 
+          (progress) => setStatus(progress),
+          {
+            structure: t.genStructure,
+            caption: t.genCaption,
+            slide: t.genSlide
+          }
+        );
+        return { id: Math.random().toString(36).substr(2, 9), topic, images: res.images, caption: res.caption, status: 'completed' as const, timestamp: Date.now() };
+      }));
+      setPosts(prev => [...results, ...prev]); setStatus('ГОТОВО!'); setView('dashboard');
+    } catch (err: any) { setStatus('ОШИБКА: ' + err.message); } finally { setIsGenerating(false); setTimeout(() => setStatus(null), 3000); }
+  };
+
+  // --- CONFIRMATION HANDLER ---
+  const requestConfirmation = (message: string, action: () => void) => {
+    setConfirmationState({ isOpen: true, message, onConfirm: action });
+  };
+
+  const handleConfirm = () => {
+    confirmationState.onConfirm();
+    setConfirmationState({ ...confirmationState, isOpen: false });
+  };
+
+  const deletePost = (id: string) => {
+    requestConfirmation('Вы уверены, что хотите удалить этот проект?', () => {
+        setPosts(prev => prev.filter(p => p.id !== id));
+        if (selectedPost?.id === id) setSelectedPost(null);
     });
   };
 
-  const confirmRefinement = async () => {
-    const { type, targetPost, targetImageId, targetDescription } = refinementModal;
-    if (!targetPost) return;
-    
-    setRefinementModal(prev => ({ ...prev, isOpen: false }));
-    const currentRefinement = refinementText.trim();
-
-    if (type === 'all') {
-      setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, status: 'processing', images: [], caption: '' } : p));
-      setIsGenerating(true);
-      try {
-        if (settings.textService === 'google' || settings.imageService === 'google') await checkApiKey();
-        const result = await generateCarouselBatch(targetPost.topic, settings, instructions, kieSettings, openRouterSettings, currentRefinement);
-        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, ...result, status: 'completed' } : p));
-      } catch (err: any) {
-        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
-        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, status: 'failed' } : p));
-        setAdminStatus(err.message);
-        setTimeout(() => setAdminStatus(null), 5000);
-      } finally { setIsGenerating(false); }
-    } else if (type === 'text') {
-      setIsRegeneratingText(true);
-      try {
-        if (settings.textService === 'google') await checkApiKey();
-        const newCaption = await regeneratePostCaption(targetPost.topic, targetPost.images.map(img => img.description), settings, instructions, openRouterSettings, currentRefinement);
-        setPosts(prev => prev.map(p => p.id === targetPost.id ? { ...p, caption: newCaption } : p));
-      } catch (err: any) {
-        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
-        setAdminStatus(err.message);
-        setTimeout(() => setAdminStatus(null), 5000);
-      } finally { setIsRegeneratingText(false); }
-    } else if (type === 'image' && targetImageId && targetDescription) {
-      setRegeneratingImageId(targetImageId);
-      try {
-        if (settings.imageService === 'google') await checkApiKey();
-        const newUrl = await regenerateSingleImage(targetDescription, settings, kieSettings, currentRefinement);
-        setPosts(prev => prev.map(p => p.id === targetPost.id ? {
-          ...p,
-          images: p.images.map(img => img.id === targetImageId ? { ...img, imageUrl: newUrl } : img)
-        } : p));
-      } catch (err: any) {
-        if (err.message?.includes("Requested entity was not found")) await window.aistudio.openSelectKey();
-        setAdminStatus(err.message);
-        setTimeout(() => setAdminStatus(null), 5000);
-      } finally { setRegeneratingImageId(null); }
-    }
+  const removeTopic = (index: number) => {
+    requestConfirmation('Удалить эту тему из списка?', () => {
+        setTopics(topics.filter((_, i) => i !== index));
+    });
   };
 
-  const handlePublish = async (post: CarouselPost) => {
-    if (!tgSettings.botToken || !tgSettings.channelId) { setShowAdmin(true); return; }
-    setIsPublishing(true);
+  const downloadZip = async (post: CarouselPost) => {
+    const zip = new JSZip();
+    setStatus('СОБИРАЕМ АРХИВ...');
     try {
-      await publishToTelegram(post.images.map(i => i.imageUrl), post.caption, tgSettings);
-      setAdminStatus(t.publishSuccess);
-      setTimeout(() => setAdminStatus(null), 3000);
-    } catch (err: any) { 
-      setAdminStatus(t.publishError + ": " + err.message);
-      setTimeout(() => setAdminStatus(null), 5000);
-    } finally { setIsPublishing(false); }
-  };
-
-  const startGeneration = async () => {
-    await checkApiKey();
-    const validTopics = topics.filter(t => t.trim() !== '');
-    if (!validTopics.length) return;
-    setIsGenerating(true);
-    const newPosts: CarouselPost[] = validTopics.map(topic => ({
-      id: Math.random().toString(36).substr(2, 9),
-      topic, images: [], caption: '', status: 'pending', timestamp: Date.now()
-    }));
-    setPosts(prev => [...newPosts, ...prev]);
-    setActivePostId(newPosts[0].id);
-    for (const post of newPosts) {
-      try {
-        setPosts(prev => prev.map(p => p.id === post.id ? { ...p, status: 'processing' } : p));
-        const result = await generateCarouselBatch(post.topic, settings, instructions, kieSettings, openRouterSettings);
-        setPosts(prev => prev.map(p => p.id === post.id ? { ...p, ...result, status: 'completed' } : p));
-      } catch (err: any) {
-        setPosts(prev => prev.map(p => p.id === post.id ? { ...p, status: 'failed' } : p));
-        setAdminStatus(err.message);
-        setTimeout(() => setAdminStatus(null), 5000);
+      for (let i = 0; i < post.images.length; i++) {
+        const img = post.images[i];
+        try {
+            // Try fetching with cors mode, if it fails, fallback
+            const response = await fetch(img.imageUrl);
+            if (!response.ok) throw new Error('Network error');
+            const blob = await response.blob();
+            zip.file(`slide_${i + 1}.png`, blob);
+        } catch (e) {
+            console.error(`Failed to download image ${i+1} due to CORS or network error.`, e);
+            // Fallback: create a text file with the link
+            zip.file(`slide_${i + 1}_link.txt`, `Image could not be downloaded automatically due to browser security (CORS) or network issues.\n\nDownload Link: ${img.imageUrl}`);
+        }
       }
+      zip.file('caption.txt', post.caption);
+      const content = await zip.generateAsync({ type: "blob" });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `carousel_${post.topic.replace(/\s+/g, '_')}.zip`;
+      link.click();
+    } catch (e) { setStatus('Ошибка скачивания'); } finally { setStatus(null); }
+  };
+
+  const openRefinementModal = (type: 'slide' | 'caption', index: number | null) => {
+    setRefinementState({ isOpen: true, type, index, value: '' });
+  };
+
+  const handleRefinementSubmit = async () => {
+    if (!selectedPost) return;
+    const { type, index, value } = refinementState;
+    setRefinementState({ ...refinementState, isOpen: false });
+
+    if (type === 'slide' && index !== null) {
+        setStatus(`ПЕРЕСОЗДАЕМ СЛАЙД ${index + 1}...`);
+        try {
+            const slide = selectedPost.images[index];
+            const newUrl = await regenerateSingleImage(slide.description, settings, kieSettings, googleSettings.apiKey, value);
+            const updatedImages = [...selectedPost.images];
+            updatedImages[index] = { ...slide, imageUrl: newUrl };
+            const updatedPost = { ...selectedPost, images: updatedImages };
+            setSelectedPost(updatedPost);
+            setPosts(prev => prev.map(p => p.id === updatedPost.id ? updatedPost : p));
+            setStatus('СЛАЙД ОБНОВЛЕН!');
+        } catch (e: any) { setStatus('Ошибка: ' + e.message); } finally { setTimeout(() => setStatus(null), 2000); }
+    } else if (type === 'caption') {
+        setStatus('ПЕРЕСОЗДАЕМ ТЕКСТ...');
+        try {
+            const newCaption = await regeneratePostCaption(
+                selectedPost.topic, 
+                selectedPost.images.map(i => i.description), 
+                settings, 
+                instructions, 
+                openRouterSettings, 
+                googleSettings.apiKey,
+                value
+            );
+            const updatedPost = { ...selectedPost, caption: newCaption };
+            setSelectedPost(updatedPost);
+            setPosts(prev => prev.map(p => p.id === updatedPost.id ? updatedPost : p));
+            setStatus('ТЕКСТ ОБНОВЛЕН!');
+        } catch (e: any) { setStatus('Ошибка: ' + e.message); } finally { setTimeout(() => setStatus(null), 2000); }
     }
-    setIsGenerating(false);
   };
 
-  const handleDeletePost = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setPostToDeleteId(id);
-    setShowSingleDeleteConfirm(true);
-  };
-
-  const confirmDeleteSinglePost = () => {
-    if (postToDeleteId) {
-      setPosts(prev => prev.filter(p => p.id !== postToDeleteId));
-      if (activePostId === postToDeleteId) setActivePostId(null);
+  const handlePublishTelegram = async () => {
+    if (!selectedPost) return;
+    setStatus(t.publishing);
+    try {
+        await publishToTelegram(selectedPost.images.map(i => i.imageUrl), selectedPost.caption, tgSettings);
+        setStatus(t.publishSuccess);
+    } catch (e: any) {
+        setStatus(`Ошибка: ${e.message}`);
+    } finally {
+        setTimeout(() => setStatus(null), 3000);
     }
-    setShowSingleDeleteConfirm(false);
-    setPostToDeleteId(null);
   };
 
-  const activePost = posts.find(p => p.id === activePostId);
+  const handleChangePassword = () => {
+    const db: User[] = JSON.parse(localStorage.getItem('users_db') || '[]');
+    const userIdx = db.findIndex(u => u.id === currentUser?.id);
+    if (userIdx === -1) return;
+    if (db[userIdx].password !== currentPass) { setStatus(t.wrongPassword); return; }
+    db[userIdx].password = newPass;
+    localStorage.setItem('users_db', JSON.stringify(db));
+    setStatus(t.passwordChanged);
+    setCurrentPass(''); setNewPass('');
+    setTimeout(() => setStatus(null), 3000);
+  };
+
+  // --- ADMIN ACTIONS ---
+  const handleDeleteUser = (userId: string) => {
+    if (userId === currentUser?.id) return;
+    requestConfirmation('Удалить пользователя навсегда?', () => {
+        const db: User[] = JSON.parse(localStorage.getItem('users_db') || '[]');
+        const updatedDb = db.filter(u => u.id !== userId);
+        localStorage.setItem('users_db', JSON.stringify(updatedDb));
+        setStatus('Пользователь удален');
+        setTimeout(() => setStatus(null), 2000);
+    });
+  };
+
+  const handleToggleBlockUser = (userId: string) => {
+    if (userId === currentUser?.id) return;
+    const db: User[] = JSON.parse(localStorage.getItem('users_db') || '[]');
+    const userIdx = db.findIndex(u => u.id === userId);
+    if (userIdx === -1) return;
+    db[userIdx].isBlocked = !db[userIdx].isBlocked;
+    localStorage.setItem('users_db', JSON.stringify(db));
+    setStatus(db[userIdx].isBlocked ? 'Пользователь заблокирован' : 'Пользователь разблокирован');
+    setTimeout(() => setStatus(null), 2000);
+  };
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-6 text-slate-200">
+        <div className="max-w-[440px] w-full bg-[#111827] border border-slate-800 rounded-[48px] p-10 shadow-2xl space-y-8 animate-in zoom-in-95">
+          <div className="text-center space-y-4">
+            <div className="mx-auto w-16 h-16 bg-[#2563eb] rounded-2xl flex items-center justify-center shadow-xl shadow-blue-500/20"><Layout className="w-8 h-8 text-white" /></div>
+            <h2 className="text-4xl font-black text-white">Carousel <span className="text-blue-500">Pro</span></h2>
+            <p className="text-slate-500 text-sm font-bold uppercase tracking-tight">{authMode === 'login' ? t.loginTitle : t.registerTitle}</p>
+          </div>
+          <div className="space-y-4">
+            <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-2 tracking-widest">{t.username}</label>
+              <input type="text" value={authForm.user} onChange={e => setAuthForm({...authForm, user: e.target.value})} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-white" />
+            </div>
+            {authMode === 'register' && (
+              <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-2 tracking-widest">{t.email}</label>
+                <input type="email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-white" />
+              </div>
+            )}
+            <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-2 tracking-widest">{t.password}</label>
+              <input type="password" value={authForm.pass} onChange={e => setAuthForm({...authForm, pass: e.target.value})} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-white" />
+            </div>
+            {authMode === 'register' && (
+              <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-2 tracking-widest">{t.confirmPassword}</label>
+                <input type="password" value={authForm.confirm} onChange={e => setAuthForm({...authForm, confirm: e.target.value})} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 text-white" />
+              </div>
+            )}
+          </div>
+          {status && <p className="text-xs font-bold text-red-500 text-center animate-pulse">{status}</p>}
+          <button onClick={handleAuth} className="w-full py-5 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-black text-white transition-all text-lg tracking-widest uppercase shadow-xl">{authMode === 'login' ? t.login : t.register}</button>
+          <p className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">{authMode === 'login' ? t.noAccount : t.hasAccount} 
+            <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="text-blue-500 ml-2 hover:underline">{authMode === 'login' ? 'Регистрация' : 'Войти'}</button>
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-slate-950 text-slate-200 font-sans">
-      {/* Sidebar */}
-      <aside className="w-full md:w-80 border-r border-slate-800 bg-slate-900/50 p-6 flex flex-col gap-6 overflow-y-auto">
-        <header className="flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActivePostId(null)}>
-            <div className="p-2 bg-blue-600 rounded-lg"><Layout className="w-5 h-5 text-white" /></div>
-            <h1 className="text-lg font-bold">Carousel <span className="text-blue-500">Pro</span></h1>
-          </div>
-          <div className="flex gap-1">
-            <button onClick={() => setLanguage(language === 'en' ? 'ru' : 'en')} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Globe className="w-4 h-4" /></button>
-            <button onClick={() => setShowAdmin(true)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><ShieldCheck className="w-4 h-4" /></button>
-          </div>
+    <div className="min-h-screen flex flex-col md:flex-row bg-[#020617] text-slate-200 font-sans overflow-hidden">
+      {/* Sidebar Navigation */}
+      <aside className="w-full md:w-72 border-r border-slate-800 bg-[#0f172a]/95 flex flex-col shrink-0">
+        <header className="p-8 pb-4 flex items-center gap-3">
+          <div className="p-2 bg-[#2563eb] rounded-lg shadow-lg shadow-blue-500/10"><Layout className="w-5 h-5 text-white" /></div>
+          <h1 className="text-xl font-black tracking-tight">Carousel <span className="text-blue-500">Pro</span></h1>
         </header>
-
-        <div className="space-y-6">
-          <section className="space-y-3">
-             <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.topicsLabel}</label>
-             {topics.map((topic, idx) => (
-               <div key={idx} className="relative group">
-                 <input type="text" value={topic} onChange={(e) => setTopics(topics.map((t, i) => i === idx ? e.target.value : t))} placeholder={t.topicPlaceholder} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-sm outline-none focus:ring-1 focus:ring-blue-500" />
-                 {topics.length > 1 && <button onClick={() => setTopics(topics.filter((_, i) => i !== idx))} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 group-hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>}
-               </div>
-             ))}
-             <button onClick={() => setTopics([...topics, ''])} className="w-full py-2 border border-dashed border-slate-700 rounded-xl text-xs text-slate-500 hover:text-slate-300 transition-all font-medium">+ {t.addTopic}</button>
-          </section>
-
-          <section className="space-y-4 pt-4 border-t border-slate-800">
-            <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.carouselSettings}</label>
-            <div className="space-y-3">
-               <div>
-                  <label className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 block">{t.textService}</label>
-                  <div className="grid grid-cols-2 gap-1 p-1 bg-slate-800 rounded-lg">
-                    <button onClick={() => setSettings({...settings, textService: 'google'})} className={`py-1 text-[9px] font-bold rounded transition-all ${settings.textService === 'google' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-400'}`}>GOOGLE</button>
-                    <button onClick={() => setSettings({...settings, textService: 'openrouter'})} className={`py-1 text-[9px] font-bold rounded transition-all ${settings.textService === 'openrouter' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-400'}`}>OPENROUTER</button>
-                  </div>
-               </div>
-               <div>
-                  <label className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 block">{t.visualEngine}</label>
-                  <div className="grid grid-cols-2 gap-1 p-1 bg-slate-800 rounded-lg">
-                    <button onClick={() => setSettings({...settings, imageService: 'google'})} className={`py-1 text-[9px] font-bold rounded transition-all ${settings.imageService === 'google' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-400'}`}>GOOGLE</button>
-                    <button onClick={() => setSettings({...settings, imageService: 'kie'})} className={`py-1 text-[9px] font-bold rounded transition-all ${settings.imageService === 'kie' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-400'}`}>KIE.AI</button>
-                  </div>
-               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-               <div className="space-y-1">
-                 <label className="text-[10px] text-slate-500 uppercase font-bold">{t.imageCount}: {settings.count}</label>
-                 <input type="range" min="1" max="10" value={settings.count} onChange={e => setSettings({...settings, count: parseInt(e.target.value)})} className="w-full h-1 bg-slate-800 rounded-lg accent-blue-600 cursor-pointer" />
-               </div>
-               <div className="space-y-1">
-                 <label className="text-[10px] text-slate-500 uppercase font-bold">{t.aspect}</label>
-                 <select value={settings.aspectRatio} onChange={e => setSettings({...settings, aspectRatio: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg py-1 px-1 text-[10px] outline-none focus:ring-1 focus:ring-blue-500">
-                   <option value="1:1">1:1 Square</option>
-                   <option value="4:5">4:5 Insta</option>
-                   <option value="16:9">16:9 Wide</option>
-                   <option value="9:16">9:16 Story</option>
-                 </select>
-               </div>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] text-slate-500 uppercase font-bold">{t.baseStyle}</label>
-              <select value={settings.style} onChange={e => setSettings({...settings, style: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-lg py-2 px-2 text-[11px] outline-none focus:ring-1 focus:ring-blue-500">
-                {STYLES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] text-slate-600 font-bold uppercase">{t.extraPromptLabel}</label>
-              <textarea value={settings.customStylePrompt} onChange={e => setSettings({...settings, customStylePrompt: e.target.value})} placeholder={t.styleDetailsPlaceholder} className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2 px-3 text-[10px] h-16 resize-none outline-none focus:ring-1 focus:ring-blue-500" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.referenceImagesLabel}</label>
-              {settings.referenceImages.map((url, idx) => (
-                <div key={idx} className="relative group">
-                  <input type="text" value={url} onChange={(e) => {
-                    const nr = [...settings.referenceImages]; nr[idx] = e.target.value; setSettings({...settings, referenceImages: nr});
-                  }} placeholder="Image URL..." className="w-full bg-slate-800 border border-slate-700 rounded-lg py-1.5 px-3 text-[9px] outline-none focus:ring-1 focus:ring-blue-500" />
-                  <button onClick={() => setSettings({...settings, referenceImages: settings.referenceImages.filter((_, i) => i !== idx)})} className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"><Trash2 className="w-3 h-3" /></button>
-                </div>
-              ))}
-              {settings.referenceImages.length < 3 && (
-                <button onClick={() => setSettings({...settings, referenceImages: [...settings.referenceImages, '']})} className="w-full py-1 border border-dashed border-slate-700 rounded-lg text-[10px] text-slate-500 hover:text-slate-300 transition-all font-medium">+ Reference</button>
-              )}
-            </div>
-          </section>
-
-          <button onClick={startGeneration} disabled={isGenerating} className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-500/20 disabled:opacity-50 mt-4 active:scale-95">
-            {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-            {isGenerating ? t.generating : t.generateButton}
-          </button>
-        </div>
+        <nav className="flex-1 px-4 space-y-1 pt-6">
+          {[
+            { id: 'dashboard', icon: Layout, label: t.navDashboard },
+            { id: 'generator', icon: Send, label: t.navGenerator },
+            { id: 'api_keys', icon: Key, label: t.navApiKeys },
+            { id: 'prompts', icon: Terminal, label: t.navPrompts },
+            { id: 'profile', icon: UserIcon, label: t.navProfile },
+          ].map(item => (
+            <button key={item.id} onClick={() => { setView(item.id as any); setSelectedPost(null); }} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all font-bold text-sm uppercase tracking-wider ${view === item.id ? 'bg-[#2563eb] text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'}`}>
+              <item.icon className="w-5 h-5" /> {item.label}
+            </button>
+          ))}
+          {currentUser.role === 'admin' && (
+            <button onClick={() => setView('admin_users')} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm uppercase tracking-wider ${view === 'admin_users' ? 'bg-purple-600 text-white shadow-xl shadow-purple-500/20' : 'text-slate-500 hover:bg-slate-800'}`}>
+              <Users className="w-5 h-5" /> {t.adminDashboard}
+            </button>
+          )}
+        </nav>
+        <footer className="p-4 border-t border-slate-800/50">
+           <button onClick={logout} className="w-full flex items-center gap-4 px-4 py-3 text-slate-500 hover:text-red-400 font-bold uppercase text-xs tracking-widest transition-colors"><LogOut className="w-4 h-4" /> {t.logout}</button>
+        </footer>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-slate-950">
-        <div className="border-b border-slate-800 p-4 bg-slate-900/30 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
-          <div className="flex gap-2">
-            <button onClick={() => setActivePostId(null)} className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap border transition-all ${activePostId === null ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}>{t.dashboard}</button>
-            {posts.map(post => (
-              <button key={post.id} onClick={() => setActivePostId(post.id)} className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap border transition-all flex items-center gap-2 ${activePostId === post.id ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}>
-                {post.status === 'processing' ? <Loader2 className="w-3 h-3 animate-spin" /> : <div className={`w-2 h-2 rounded-full ${post.status === 'completed' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.4)]' : post.status === 'failed' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : 'bg-slate-600 animate-pulse'}`} />}
-                {post.topic.substring(0, 15)}...
-              </button>
-            ))}
-          </div>
-          {posts.length > 0 && <button onClick={() => setShowClearConfirm(true)} className="text-[10px] font-bold text-slate-600 hover:text-red-400 uppercase tracking-widest transition-colors">{t.clearHistory}</button>}
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 md:p-10">
-          {activePost ? (
-            <div className="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-              {activePost.status === 'processing' ? (
-                <div className="flex flex-col items-center justify-center py-24 space-y-4 text-center">
-                  <Loader2 className="w-14 h-14 text-blue-500 animate-spin" />
-                  <h2 className="text-2xl font-bold">{t.generating}...</h2>
-                  <p className="text-slate-500 text-sm max-w-sm">Parallel batch generation active. Capturing all high-quality frames from {settings.imageService.toUpperCase()}.</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex flex-col md:flex-row items-start justify-between gap-6">
-                    <h2 className="text-4xl font-black text-white tracking-tight">{activePost.topic}</h2>
-                    <div className="flex flex-wrap gap-3">
-                      <button onClick={() => openRefinement('all', activePost)} disabled={isGenerating} className="px-5 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-700 transition-all disabled:opacity-50"><RotateCw className="w-4 h-4" /> {t.regenerateAll}</button>
-                      <button onClick={() => handleDownloadAllAsZip(activePost)} disabled={isZipping} className="px-5 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-700 transition-all disabled:opacity-50">{isZipping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} ZIP</button>
-                      <button onClick={() => handlePublish(activePost)} disabled={isPublishing} className="px-5 py-3 bg-blue-600 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20">{isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />} {t.publishTelegram}</button>
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><ImageIcon className="w-4 h-4" /> {t.visualSequence}</h3>
-                    <div className="flex overflow-x-auto pb-6 gap-6 snap-x no-scrollbar">
-                      {activePost.images.map((img, i) => (
-                        <div key={img.id} className="min-w-[340px] md:min-w-[480px] aspect-square snap-center relative rounded-3xl overflow-hidden border border-slate-800 shadow-2xl group">
-                          <img src={img.imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="" />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity p-8 flex flex-col justify-end">
-                             <p className="text-[11px] text-slate-300 font-medium leading-relaxed mb-4 line-clamp-4">{img.description}</p>
-                             <div className="flex gap-3">
-                               <button onClick={() => handleDownloadImage(img.imageUrl, i)} className="px-4 py-2 bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all"><Download className="w-3.5 h-3.5" /> {t.download}</button>
-                               <button onClick={() => openRefinement('image', activePost, img.id, img.description)} disabled={regeneratingImageId === img.id} className="px-4 py-2 bg-white/10 backdrop-blur-md hover:bg-white/20 rounded-xl text-[10px] font-bold flex items-center gap-2 transition-all disabled:opacity-50">
-                                 {regeneratingImageId === img.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />} {t.regenerateImage}
-                               </button>
-                             </div>
-                          </div>
-                          <div className="absolute top-5 left-5 bg-black/70 backdrop-blur px-4 py-1.5 rounded-full text-[10px] font-black border border-white/10 tracking-widest">SLIDE {i+1}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-                    <div className="lg:col-span-2 space-y-4">
-                       <div className="flex items-center justify-between">
-                          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><TypeIcon className="w-4 h-4" /> {t.postContent}</h3>
-                          <button onClick={() => openRefinement('text', activePost)} disabled={isRegeneratingText} className="text-[10px] font-bold text-blue-400 hover:text-blue-300 flex items-center gap-2 uppercase tracking-widest transition-all disabled:opacity-50">
-                            {isRegeneratingText ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCw className="w-3 h-3" />} {t.regenerateCaption}
-                          </button>
-                       </div>
-                       <div className="bg-slate-900/50 border border-slate-800 rounded-[32px] p-8 min-h-[400px]">
-                          <textarea value={activePost.caption} onChange={e => setPosts(posts.map(p => p.id === activePost.id ? {...p, caption: e.target.value} : p))} className="w-full h-full bg-transparent border-none outline-none text-slate-200 font-mono text-sm leading-relaxed resize-none selection:bg-blue-500/30" />
-                       </div>
-                    </div>
-                    <div className="space-y-6 self-start">
-                       <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Post Details</h3>
-                       <div className="bg-slate-900/40 border border-slate-800 rounded-[32px] p-6 space-y-6">
-                          <div className="space-y-1">
-                             <label className="text-[9px] font-bold text-slate-600 uppercase">Target Channel</label>
-                             <div className="flex items-center gap-2 text-sm font-bold text-blue-400 truncate"><Globe className="w-4 h-4" /> {tgSettings.channelId || "Not set"}</div>
-                          </div>
-                          <div className="space-y-1">
-                             <label className="text-[9px] font-bold text-slate-600 uppercase">Generation Config</label>
-                             <div className="text-[11px] font-bold text-slate-400 flex items-center gap-2 uppercase"><Cpu className="w-4 h-4" /> {settings.imageService} + {settings.textService}</div>
-                             <div className="text-[10px] text-slate-500 mt-1">{settings.aspectRatio} Aspect • {settings.style}</div>
-                          </div>
-                       </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <div className="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-              <div className="flex items-center justify-between">
+      {/* Main Panel */}
+      <main className="flex-1 overflow-y-auto bg-[#020617] p-6 md:p-12 relative">
+        <div className="max-w-6xl mx-auto space-y-10">
+          
+          {/* Dashboard View */}
+          {view === 'dashboard' && !selectedPost && (
+            <>
+              <div className="flex justify-between items-center">
                 <h2 className="text-3xl font-black text-white tracking-tight">{t.dashboard}</h2>
                 {posts.length > 0 && (
-                   <div className="flex items-center gap-4 text-xs font-bold text-slate-500 uppercase tracking-widest">
-                     <div className="flex items-center gap-1.5"><Layout className="w-3.5 h-3.5" /> {posts.length} {t.history}</div>
-                   </div>
+                  <button onClick={() => requestConfirmation('Вы уверены, что хотите удалить ВСЮ историю?', () => setPosts([]))} className="text-[10px] font-bold text-red-500 hover:text-red-400 uppercase tracking-widest flex items-center gap-2 bg-red-500/10 px-4 py-2 rounded-full border border-red-500/20">
+                    <Trash2 className="w-3 h-3" /> Очистить всё
+                  </button>
                 )}
               </div>
               {posts.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {posts.map(post => (
-                    <div 
-                      key={post.id} 
-                      onClick={() => setActivePostId(post.id)}
-                      className="group bg-slate-900/40 border border-slate-800 rounded-[32px] p-6 cursor-pointer hover:border-blue-500/50 hover:bg-slate-900/60 transition-all flex flex-col gap-4 shadow-sm hover:shadow-xl hover:shadow-blue-500/5 relative"
-                    >
-                      <button 
-                        onClick={(e) => handleDeletePost(e, post.id)} 
-                        className="absolute top-4 right-4 p-2 bg-slate-800/80 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-full opacity-0 group-hover:opacity-100 transition-all z-10"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                      <div className="flex items-center justify-between">
-                        <div className={`w-3 h-3 rounded-full ${post.status === 'completed' ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.4)]' : post.status === 'failed' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.4)]' : 'bg-slate-600 animate-pulse'}`} />
-                        <span className="text-[10px] font-bold text-slate-600 uppercase tracking-tighter flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> {new Date(post.timestamp).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-200 line-clamp-2 group-hover:text-white transition-colors pr-8">{post.topic}</h3>
-                      <div className="mt-auto flex items-center justify-between text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                         <div className="flex items-center gap-1.5"><ImageIcon className="w-3 h-3" /> {post.images.length} {t.images}</div>
-                         <div className="text-blue-500 group-hover:translate-x-1 transition-transform">{t.viewPost} →</div>
-                      </div>
+                    <div key={post.id} onClick={() => setSelectedPost(post)} className="bg-[#111827] border border-slate-800 rounded-[32px] p-6 cursor-pointer hover:border-blue-500/50 transition-all flex flex-col gap-4 group">
+                       <div className="flex justify-between items-start">
+                         <h3 className="font-bold text-lg text-slate-200 line-clamp-2">{post.topic}</h3>
+                         <button onClick={(e) => { e.stopPropagation(); deletePost(post.id); }} className="p-2 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"><Trash2 className="w-4 h-4" /></button>
+                       </div>
+                       <div className="flex -space-x-3 overflow-hidden">
+                          {post.images.slice(0, 4).map((img, i) => (
+                            <div key={i} className="w-10 h-10 rounded-full border-2 border-[#111827] bg-slate-800 overflow-hidden shrink-0">
+                               <img src={img.imageUrl} className="w-full h-full object-cover" />
+                            </div>
+                          ))}
+                       </div>
+                       <div className="mt-auto text-[10px] font-bold text-slate-500 uppercase flex justify-between tracking-widest">
+                          <span>{post.images.length} {t.images}</span>
+                          <span className="text-blue-500">{t.viewPost} →</span>
+                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="h-[60vh] flex flex-col items-center justify-center text-center space-y-8 max-w-md mx-auto opacity-80">
-                  <div className="w-28 h-28 bg-slate-900 rounded-[40px] flex items-center justify-center border border-slate-800 shadow-2xl animate-pulse">
-                    <Layout className="w-12 h-12 text-slate-700" />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-2xl font-bold text-white">{t.firstCarouselTitle}</h3>
-                    <p className="text-slate-500 text-sm leading-relaxed">{t.firstCarouselDesc}</p>
-                  </div>
-                  <div className="flex gap-2 w-full">
-                    <div className="flex-1 p-3 bg-slate-900/40 rounded-2xl border border-slate-800 text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Parallel Batch</div>
-                    <div className="flex-1 p-3 bg-slate-900/40 rounded-2xl border border-slate-800 text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Regen System</div>
-                  </div>
+                <div className="h-[60vh] flex flex-col items-center justify-center text-center opacity-30 space-y-6">
+                  <div className="w-24 h-24 bg-slate-800 rounded-full flex items-center justify-center"><Layout className="w-10 h-10 text-slate-600" /></div>
+                  <h3 className="text-2xl font-bold text-white">{t.firstCarouselTitle}</h3>
                 </div>
               )}
+            </>
+          )}
+
+          {/* Project Details View */}
+          {selectedPost && (
+            <div className="space-y-8 animate-in slide-in-from-right-10 duration-300">
+               <button onClick={() => setSelectedPost(null)} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors uppercase text-[10px] font-bold tracking-widest"><ChevronLeft className="w-4 h-4" /> Назад к дашборду</button>
+               <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+                  <div>
+                    <h2 className="text-4xl font-black text-white tracking-tight">{selectedPost.topic}</h2>
+                    <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-2">{selectedPost.images.length} Слайдов • {new Date(selectedPost.timestamp).toLocaleDateString()}</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => downloadZip(selectedPost)} className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all"><Download className="w-4 h-4" /> Скачать ZIP</button>
+                    <button onClick={handlePublishTelegram} className="flex items-center gap-2 px-6 py-3 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all shadow-xl shadow-blue-500/20"><Share2 className="w-4 h-4" /> В Telegram</button>
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
+                  <div className="space-y-6">
+                     <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Слайды карусели</h3>
+                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {selectedPost.images.map((img, idx) => (
+                          <div key={img.id} className="bg-[#111827] border border-slate-800 rounded-3xl p-4 space-y-4 group">
+                             <div className="aspect-square rounded-2xl overflow-hidden bg-slate-800 relative">
+                                <img src={img.imageUrl} className="w-full h-full object-cover" />
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                                   <button onClick={() => setZoomedImage(img.imageUrl)} className="p-3 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full text-white hover:scale-110 transition-transform"><Maximize2 className="w-5 h-5" /></button>
+                                   <button onClick={() => setPromptViewState({ isOpen: true, prompt: img.fullPrompt || img.description })} className="p-3 bg-indigo-600 rounded-full text-white hover:scale-110 transition-transform"><FileText className="w-5 h-5" /></button>
+                                   <button onClick={() => openRefinementModal('slide', idx)} className="p-3 bg-blue-600 rounded-full text-white hover:scale-110 transition-transform"><RefreshCw className="w-5 h-5" /></button>
+                                   <a href={img.imageUrl} download={`slide_${idx+1}.png`} className="p-3 bg-slate-700 rounded-full text-white hover:scale-110 transition-transform"><Download className="w-5 h-5" /></a>
+                                </div>
+                                <div className="absolute top-3 left-3 w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm shadow-lg">{idx+1}</div>
+                             </div>
+                             <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed italic">{img.description}</p>
+                          </div>
+                        ))}
+                     </div>
+                  </div>
+                  <div className="space-y-6">
+                     <div className="flex justify-between items-center">
+                       <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Текст поста</h3>
+                       <button onClick={() => openRefinementModal('caption', null)} className="p-2 text-blue-500 hover:bg-blue-500/10 rounded-lg transition-colors"><RefreshCw className="w-4 h-4" /></button>
+                     </div>
+                     <textarea value={selectedPost.caption} readOnly className="w-full h-[60vh] bg-[#111827] border border-slate-800 rounded-[40px] p-8 text-sm leading-relaxed text-slate-300 outline-none resize-none font-sans whitespace-pre-wrap" />
+                  </div>
+               </div>
+            </div>
+          )}
+
+          {/* Generator View */}
+          {view === 'generator' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start animate-in fade-in duration-500">
+               <div className="lg:col-span-1 space-y-6">
+                  <section className="bg-[#111827] border border-slate-800 rounded-[32px] p-6 space-y-4 shadow-xl">
+                     <label className="text-[10px] font-bold uppercase text-slate-500 tracking-widest">{t.topicsLabel}</label>
+                     {topics.map((topic, idx) => (
+                       <div key={idx} className="relative group">
+                         <input type="text" value={topic} onChange={(e) => setTopics(topics.map((t, i) => i === idx ? e.target.value : t))} placeholder={t.topicPlaceholder} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-3 text-sm outline-none focus:ring-1 focus:ring-blue-500 text-white" />
+                         {topics.length > 1 && <button onClick={() => removeTopic(idx)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>}
+                       </div>
+                     ))}
+                     <button onClick={() => setTopics([...topics, ''])} className="w-full py-2 border border-dashed border-slate-700 rounded-xl text-xs text-slate-500 hover:text-slate-300 transition-all font-medium">+ {t.addTopic}</button>
+                     <button onClick={handleGenerate} disabled={isGenerating} className="w-full py-5 bg-[#2563eb] hover:bg-blue-500 rounded-xl font-black text-white flex items-center justify-center gap-2 transition-all shadow-xl shadow-blue-500/20 uppercase text-sm tracking-widest">
+                        {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />} {t.generateButton}
+                     </button>
+                  </section>
+               </div>
+               <div className="lg:col-span-2 space-y-6">
+                  <div className="bg-[#111827] border border-slate-800 rounded-[40px] p-10 space-y-10 shadow-2xl">
+                     <h3 className="text-2xl font-black text-white uppercase tracking-tight flex items-center gap-3"><Settings2 className="w-6 h-6 text-blue-500" /> {t.paramsLabel}</h3>
+                     
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                        <div className="space-y-6">
+                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">{t.enginesLabel}</span>
+                           <div className="space-y-4">
+                              <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.textService}</span>
+                                 <select value={settings.textService} onChange={e => setSettings({...settings, textService: e.target.value as any})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                                    <option value="google">Google (Gemini 3 Pro)</option><option value="openrouter">OpenRouter (Any)</option>
+                                 </select>
+                              </div>
+                              {settings.textService === 'openrouter' && (
+                                <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">OpenRouter Model</span>
+                                   <select value={settings.openrouterModel} onChange={e => setSettings({...settings, openrouterModel: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                                      {OPEN_ROUTER_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+                                   </select>
+                                </div>
+                              )}
+                              <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.visualEngine}</span>
+                                 <select value={settings.imageService} onChange={e => setSettings({...settings, imageService: e.target.value as any})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                                    <option value="google">Google (Gemini 3 Pro Image)</option><option value="kie">Kie.ai (Nano Banana Pro)</option>
+                                 </select>
+                              </div>
+                           </div>
+                        </div>
+                        <div className="space-y-6">
+                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Format</span>
+                           <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.imageCount}</span>
+                                 <select value={settings.count} onChange={e => setSettings({...settings, count: parseInt(e.target.value)})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none">
+                                    {[1,2,3,4,5,6,7,8,9,10].map(v => <option key={v} value={v}>{v}</option>)}
+                                 </select>
+                              </div>
+                              <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.aspectRatio}</span>
+                                 <select value={settings.aspectRatio} onChange={e => setSettings({...settings, aspectRatio: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none">
+                                    <option value="1:1">1:1 Square</option><option value="9:16">9:16 Vertical</option><option value="4:5">4:5 Portrait</option>
+                                 </select>
+                              </div>
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="pt-8 space-y-6 border-t border-slate-800">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">{t.styleLabel}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                           <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.baseStyle}</span>
+                              <select value={settings.style} onChange={e => setSettings({...settings, style: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none">
+                                 {STYLES.map(s => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                           </div>
+                           <div className="space-y-2"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">{t.customStyle}</span>
+                              <textarea value={settings.customStylePrompt} onChange={e => setSettings({...settings, customStylePrompt: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-4 px-4 text-xs text-white h-24 resize-none outline-none focus:ring-1 focus:ring-blue-500" placeholder="Add specific artistic details..." />
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="pt-8 space-y-6 border-t border-slate-800">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">{t.referenceLabel} (До 3 штук)</span>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                           {settings.referenceImages.map((url, i) => (
+                             <input key={i} value={url} onChange={e => {
+                               const nr = [...settings.referenceImages]; nr[i] = e.target.value; setSettings({...settings, referenceImages: nr});
+                             }} placeholder={t.refPlaceholder} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-3 text-[10px] outline-none text-white focus:ring-1 focus:ring-blue-500 transition-all" />
+                           ))}
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            </div>
+          )}
+
+          {/* API Keys View */}
+          {view === 'api_keys' && (
+            <div className="max-w-4xl space-y-8 animate-in fade-in">
+               <h2 className="text-3xl font-black text-white tracking-tight">{t.navApiKeys}</h2>
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <section className="bg-[#111827] border border-slate-800 rounded-[32px] p-8 space-y-6 shadow-xl">
+                     <h3 className="font-bold text-blue-500 uppercase text-xs tracking-widest flex items-center gap-2"><Globe className="w-4 h-4" /> {t.tgSettingsTitle}</h3>
+                     <div className="space-y-4">
+                        <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.botToken}</label>
+                          <input type="password" value={tgSettings.botToken} onChange={e => setTgSettings({...tgSettings, botToken: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" />
+                        </div>
+                        <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.channelId}</label>
+                          <input type="text" value={tgSettings.channelId} onChange={e => setTgSettings({...tgSettings, channelId: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" />
+                        </div>
+                     </div>
+                  </section>
+                  <section className="bg-[#111827] border border-slate-800 rounded-[32px] p-8 space-y-6 flex flex-col shadow-xl">
+                     <h3 className="font-bold text-blue-500 uppercase text-xs tracking-widest flex items-center gap-2"><Key className="w-4 h-4" /> Google AI API</h3>
+                     <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.apiKey}</label>
+                       <input type="password" value={googleSettings.apiKey} onChange={e => setGoogleSettings({...googleSettings, apiKey: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" placeholder="Optional (overrides env)" />
+                     </div>
+                     <div className="mt-6 pt-6 border-t border-slate-800">
+                         <h3 className="font-bold text-blue-500 uppercase text-xs tracking-widest flex items-center gap-2 mb-4"><Key className="w-4 h-4" /> {t.kieSettingsTitle}</h3>
+                         <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.apiKey}</label>
+                           <input type="password" value={kieSettings.apiKey} onChange={e => setKieSettings({...kieSettings, apiKey: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" />
+                         </div>
+                     </div>
+                     <div className="mt-auto pt-6 border-t border-slate-800">
+                        <h3 className="font-bold text-blue-500 uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><Globe className="w-4 h-4" /> {t.orSettingsTitle}</h3>
+                        <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.apiKey}</label>
+                          <input type="password" value={openRouterSettings.apiKey} onChange={e => setOpenRouterSettings({...openRouterSettings, apiKey: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" />
+                        </div>
+                     </div>
+                  </section>
+               </div>
+               <button onClick={() => setStatus(t.settingsSaved)} className="px-10 py-4 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-black text-white text-xs tracking-widest uppercase shadow-xl transition-all active:scale-95">{t.saveSettings}</button>
+            </div>
+          )}
+
+          {/* Prompt Viewer Modal */}
+          {promptViewState.isOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+               <div className="w-full max-w-2xl bg-[#111827] border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xl font-black text-white uppercase tracking-tight">Full Prompt</h3>
+                    <button onClick={() => setPromptViewState({...promptViewState, isOpen: false})} className="text-slate-500 hover:text-white"><X className="w-6 h-6" /></button>
+                  </div>
+                  <div className="w-full h-64 bg-[#1e293b] border border-slate-700 rounded-2xl p-4 text-sm text-white overflow-y-auto whitespace-pre-wrap font-mono">
+                    {promptViewState.prompt}
+                  </div>
+                  <button onClick={() => { navigator.clipboard.writeText(promptViewState.prompt); setStatus("Скопировано!"); }} className="w-full py-4 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-bold text-white uppercase text-xs tracking-widest transition-all shadow-xl shadow-blue-500/20">КОПИРОВАТЬ</button>
+               </div>
+            </div>
+          )}
+
+          {view === 'prompts' && (
+            <div className="space-y-8 animate-in fade-in">
+               <h2 className="text-3xl font-black text-white tracking-tight">{t.navPrompts}</h2>
+               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="space-y-4">
+                     <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><ImageIcon className="w-4 h-4" /> {t.promptImgTitle}</h3>
+                     <textarea value={instructions.imageGenerator} onChange={e => setInstructions({...instructions, imageGenerator: e.target.value})} className="w-full h-[60vh] bg-[#111827] border border-slate-800 rounded-[32px] p-8 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-blue-500 resize-none font-mono leading-relaxed" />
+                  </div>
+                  <div className="space-y-4">
+                     <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><MessageSquare className="w-4 h-4" /> {t.promptCapTitle}</h3>
+                     <textarea value={instructions.captionGenerator} onChange={e => setInstructions({...instructions, captionGenerator: e.target.value})} className="w-full h-[60vh] bg-[#111827] border border-slate-800 rounded-[32px] p-8 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-blue-500 resize-none font-mono leading-relaxed" />
+                  </div>
+               </div>
+               <button onClick={() => { save('instructions', instructions); setStatus(t.settingsSaved); }} className="px-10 py-4 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-black text-white text-xs tracking-widest uppercase shadow-xl transition-all active:scale-95">{t.saveSettings}</button>
+            </div>
+          )}
+          
+          {/* ... (Rest of Profile and Admin views remains unchanged, handled by view state switch above) ... */}
+
+          {/* Profile View */}
+          {view === 'profile' && (
+            <div className="max-w-3xl mx-auto space-y-12 animate-in slide-in-from-bottom-5">
+              <section className="bg-[#111827] border border-slate-800 rounded-[40px] p-10 shadow-2xl space-y-8">
+                 <h2 className="text-2xl font-black text-white">{t.profileSettings}</h2>
+                 <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                       <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-1 tracking-widest">{t.username}</label>
+                          <input type="text" value={currentUser.username} readOnly className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm text-slate-400" />
+                       </div>
+                       <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-1 tracking-widest">{t.email}</label>
+                          <input type="text" value={currentUser.email} readOnly className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm text-slate-400" />
+                       </div>
+                    </div>
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-1 tracking-widest">Language</label>
+                       <select value={language} onChange={e => setLanguage(e.target.value as Language)} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-500">
+                         <option value="ru">Русский</option><option value="en">English</option>
+                       </select>
+                    </div>
+                    <button className="px-10 py-4 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-black text-white transition-all text-[10px] tracking-widest uppercase active:scale-95">{t.saveChanges}</button>
+                 </div>
+              </section>
+
+              <section className="bg-[#111827] border border-slate-800 rounded-[40px] p-10 shadow-2xl space-y-8">
+                 <h2 className="text-2xl font-black text-white">{t.changePassword}</h2>
+                 <div className="space-y-6">
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-1 tracking-widest">{t.currentPassword}</label>
+                       <input type="password" value={currentPass} onChange={e => setCurrentPass(e.target.value)} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 uppercase px-1 tracking-widest">{t.newPassword}</label>
+                       <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} className="w-full bg-[#1f2937]/50 border border-slate-700 rounded-2xl py-4 px-5 text-sm text-white outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <button onClick={handleChangePassword} className="px-10 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-2xl font-black text-white text-[10px] tracking-widest uppercase transition-all active:scale-95">{t.saveChanges}</button>
+                 </div>
+              </section>
+            </div>
+          )}
+
+          {/* Admin Dashboard */}
+          {view === 'admin_users' && currentUser.role === 'admin' && (
+            <div className="space-y-8 animate-in fade-in">
+              <h2 className="text-3xl font-black text-white tracking-tight">{t.adminDashboard}</h2>
+              <div className="bg-[#111827] border border-slate-800 rounded-[40px] overflow-hidden shadow-2xl">
+                 <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-[#0f172a]/50">
+                        <th className="px-8 py-6">User</th>
+                        <th className="px-8 py-6">Email</th>
+                        <th className="px-8 py-6">Role</th>
+                        <th className="px-8 py-6">Status</th>
+                        <th className="px-8 py-6 text-right">{t.userActions}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                       {JSON.parse(localStorage.getItem('users_db') || '[]').map((u: User) => (
+                         <tr key={u.id} className={`hover:bg-slate-800/20 transition-colors ${u.isBlocked ? 'opacity-50 grayscale' : ''}`}>
+                            <td className="px-8 py-6 font-bold text-white">{u.username}</td>
+                            <td className="px-8 py-6 text-slate-400">{u.email}</td>
+                            <td className="px-8 py-6">
+                              <span className={`px-3 py-1 border rounded-full text-[9px] font-black uppercase ${u.role === 'admin' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-blue-600/10 text-blue-500 border-blue-500/20'}`}>
+                                {u.role}
+                              </span>
+                            </td>
+                            <td className="px-8 py-6">
+                               {u.isBlocked ? (
+                                 <span className="flex items-center gap-1.5 text-red-500 text-[10px] font-black uppercase"><Ban className="w-3 h-3" /> Blocked</span>
+                               ) : (
+                                 <span className="flex items-center gap-1.5 text-emerald-500 text-[10px] font-black uppercase"><CheckCircle className="w-3 h-3" /> Active</span>
+                               )}
+                            </td>
+                            <td className="px-8 py-6 text-right">
+                               <div className="flex justify-end gap-2">
+                                  {u.id !== currentUser.id && (
+                                    <>
+                                      <button 
+                                        onClick={() => handleToggleBlockUser(u.id)} 
+                                        className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase transition-all flex items-center gap-1.5 ${u.isBlocked ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500/20'}`}
+                                      >
+                                        <Ban className="w-3 h-3" /> {u.isBlocked ? t.unblockUser : t.blockUser}
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDeleteUser(u.id)} 
+                                        className="px-3 py-1.5 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded-xl text-[9px] font-black uppercase transition-all flex items-center gap-1.5"
+                                      >
+                                        <Trash2 className="w-3 h-3" /> {t.deleteUser}
+                                      </button>
+                                    </>
+                                  )}
+                               </div>
+                            </td>
+                         </tr>
+                       ))}
+                    </tbody>
+                 </table>
+              </div>
             </div>
           )}
         </div>
       </main>
 
-      {/* REFINEMENT MODAL */}
-      {refinementModal.isOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-           <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-lg p-8 shadow-2xl animate-in zoom-in-95 duration-200">
-             <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-blue-600/20 rounded-lg text-blue-500"><MessageSquare className="w-6 h-6" /></div>
-                <h3 className="text-xl font-bold">{t.refinePromptLabel}</h3>
-             </div>
-             <p className="text-xs text-slate-500 mb-4 uppercase font-bold tracking-widest">
-               Targeting: {refinementModal.type === 'all' ? 'FULL CAROUSEL' : refinementModal.type === 'text' ? 'POST CAPTION' : 'SINGLE IMAGE'}
-             </p>
-             <textarea 
-                value={refinementText} 
-                onChange={e => setRefinementText(e.target.value)}
-                autoFocus
-                placeholder="e.g. Make it more professional, change the colors to gold and black..." 
-                className="w-full h-32 bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none mb-6"
-             />
-             <div className="flex gap-4">
-                <button onClick={() => setRefinementModal({ isOpen: false, type: 'all', targetPost: null })} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
-                <button onClick={confirmRefinement} className="flex-1 py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-blue-600/20">Confirm</button>
-             </div>
+      {/* Refinement Modal */}
+      {refinementState.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="w-full max-w-lg bg-[#111827] border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl">
+              <h3 className="text-xl font-black text-white uppercase tracking-tight">{t.refineModalTitle}</h3>
+              <textarea 
+                value={refinementState.value} 
+                onChange={(e) => setRefinementState({...refinementState, value: e.target.value})}
+                placeholder={t.refinePlaceholder}
+                className="w-full h-40 bg-[#1e293b] border border-slate-700 rounded-2xl p-4 text-sm text-white resize-none outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="flex gap-4">
+                 <button onClick={() => setRefinementState({...refinementState, isOpen: false})} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold text-white uppercase text-xs tracking-widest transition-all">{t.cancel}</button>
+                 <button onClick={handleRefinementSubmit} className="flex-1 py-4 bg-[#2563eb] hover:bg-blue-500 rounded-2xl font-bold text-white uppercase text-xs tracking-widest transition-all shadow-xl shadow-blue-500/20">{t.refineSubmit}</button>
+              </div>
            </div>
         </div>
       )}
 
-      {/* CLEAR HISTORY CONFIRM MODAL */}
-      {showClearConfirm && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center text-center space-y-4">
-              <div className="p-4 bg-red-600/20 rounded-full text-red-500 mb-2"><AlertTriangle className="w-10 h-10" /></div>
-              <h3 className="text-xl font-bold">{t.clearHistory}</h3>
-              <p className="text-sm text-slate-400">{t.confirmClear}</p>
-            </div>
-            <div className="flex gap-4 mt-8">
-              <button onClick={() => setShowClearConfirm(false)} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
-              <button onClick={() => { setPosts([]); setShowClearConfirm(false); setActivePostId(null); }} className="flex-1 py-4 bg-red-600 hover:bg-red-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-red-600/20">Clear All</button>
-            </div>
-          </div>
+      {/* Confirmation Modal */}
+      {confirmationState.isOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="w-full max-w-sm bg-[#111827] border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl text-center">
+              <div className="mx-auto w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center text-red-500 mb-2">
+                 <Trash2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-black text-white uppercase tracking-tight">{t.confirmModalTitle}</h3>
+              <p className="text-sm text-slate-400 font-medium">{confirmationState.message}</p>
+              <div className="flex gap-4 pt-2">
+                 <button onClick={() => setConfirmationState({...confirmationState, isOpen: false})} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold text-white uppercase text-xs tracking-widest transition-all">{t.cancel}</button>
+                 <button onClick={handleConfirm} className="flex-1 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-white uppercase text-xs tracking-widest transition-all shadow-xl shadow-red-600/20">{t.confirmAction}</button>
+              </div>
+           </div>
         </div>
       )}
 
-      {/* DELETE SINGLE POST CONFIRM MODAL */}
-      {showSingleDeleteConfirm && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="bg-slate-900 border border-slate-800 rounded-[32px] w-full max-w-md p-8 shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center text-center space-y-4">
-              <div className="p-4 bg-red-600/20 rounded-full text-red-500 mb-2"><Trash2 className="w-10 h-10" /></div>
-              <h3 className="text-xl font-bold">{t.deletePost}</h3>
-              <p className="text-sm text-slate-400">{t.confirmDeletePost}</p>
-            </div>
-            <div className="flex gap-4 mt-8">
-              <button onClick={() => setShowSingleDeleteConfirm(false)} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest">Cancel</button>
-              <button onClick={confirmDeleteSinglePost} className="flex-1 py-4 bg-red-600 hover:bg-red-500 rounded-2xl font-bold transition-all text-sm uppercase tracking-widest shadow-lg shadow-red-600/20">Delete Post</button>
-            </div>
-          </div>
+      {/* Lightbox / Zoom Modal */}
+      {zoomedImage && (
+        <div className="fixed inset-0 z-[80] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setZoomedImage(null)}>
+           <button onClick={() => setZoomedImage(null)} className="absolute top-8 right-8 text-white/50 hover:text-white transition-colors z-[90]">
+             <X className="w-10 h-10" />
+           </button>
+           <img 
+             src={zoomedImage} 
+             className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl ring-1 ring-white/10" 
+             onClick={(e) => e.stopPropagation()} 
+           />
         </div>
       )}
 
-      {/* Admin Panel */}
-      {showAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="bg-slate-900 border border-slate-800 rounded-[40px] w-full max-w-4xl p-10 max-h-[90vh] overflow-y-auto shadow-2xl animate-in zoom-in-95 duration-300">
-            <div className="flex justify-between items-center mb-10">
-               <h3 className="text-3xl font-black flex items-center gap-4"><ShieldCheck className="w-8 h-8 text-indigo-500" /> {t.adminPanel}</h3>
-               <button onClick={() => setShowAdmin(false)} className="p-3 hover:bg-slate-800 rounded-full transition-all text-slate-500"><X className="w-7 h-7" /></button>
-            </div>
-            {adminStatus && (
-              <div className="mb-6 p-4 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl flex items-center gap-3 text-indigo-300 font-bold text-xs uppercase tracking-widest animate-pulse">
-                <Info className="w-4 h-4" /> {adminStatus}
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-              <div className="space-y-8">
-                <div className="space-y-4">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t.telegramSettings}</h4>
-                  <input type="password" value={tgSettings.botToken} onChange={e => setTgSettings({...tgSettings, botToken: e.target.value})} placeholder={t.botToken} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" />
-                  <input type="text" value={tgSettings.channelId} onChange={e => setTgSettings({...tgSettings, channelId: e.target.value})} placeholder={t.channelId} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" />
-                </div>
-                <div className="space-y-4">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">API Providers</h4>
-                  <input type="password" value={kieSettings.apiKey} onChange={e => setKieSettings({apiKey: e.target.value})} placeholder={t.kieApiKey} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" />
-                  <input type="password" value={openRouterSettings.apiKey} onChange={e => setOpenRouterSettings({apiKey: e.target.value})} placeholder={t.openrouterApiKey} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" />
-                </div>
-              </div>
-              <div className="space-y-8">
-                <div className="space-y-4">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">System Prompts</h4>
-                  <label className="text-[9px] text-slate-600 block uppercase font-bold tracking-tighter">Image Prompt Architect</label>
-                  <textarea value={instructions.imageGenerator} onChange={e => setInstructions({...instructions, imageGenerator: e.target.value})} className="w-full h-44 bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-[10px] font-mono leading-relaxed outline-none focus:ring-1 focus:ring-indigo-500 transition-all" />
-                  <label className="text-[9px] text-slate-600 block uppercase font-bold tracking-tighter">Caption Writer</label>
-                  <textarea value={instructions.captionGenerator} onChange={e => setInstructions({...instructions, captionGenerator: e.target.value})} className="w-full h-44 bg-slate-800 border border-slate-700 rounded-2xl py-4 px-5 text-[10px] font-mono leading-relaxed outline-none focus:ring-1 focus:ring-indigo-500 transition-all" />
-                </div>
-              </div>
-            </div>
-            <button onClick={saveAdminSettings} className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 rounded-[20px] font-black text-white mt-12 transition-all text-lg tracking-widest uppercase shadow-xl shadow-indigo-500/20 active:scale-95">
-              {t.saveSettings}
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Toast Overlay for Global Status Messages */}
-      {adminStatus && !showAdmin && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 border border-indigo-500/50 px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-300">
-          <Zap className="w-5 h-5 text-indigo-500 animate-pulse" />
-          <span className="text-xs font-black uppercase tracking-widest text-white">{adminStatus}</span>
+      {/* Global Status HUD */}
+      {status && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] bg-[#1e293b] border border-blue-500/50 px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5">
+          <Zap className="w-5 h-5 text-blue-500 animate-pulse" />
+          <span className="text-xs font-black uppercase tracking-widest text-white">{status}</span>
+          <button onClick={() => setStatus(null)} className="ml-4 text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
         </div>
       )}
     </div>
   );
 };
-
-// Internal utility for icons in App component
-const Info = (props: any) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-);
 
 export default App;

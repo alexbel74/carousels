@@ -1,8 +1,20 @@
 
+export interface User {
+  id: string;
+  email: string;
+  username: string;
+  password?: string;
+  role: 'admin' | 'user';
+  language: 'en' | 'ru';
+  createdAt: number;
+  isBlocked?: boolean;
+}
+
 export interface CarouselItem {
   id: string;
   imageUrl: string;
   description: string;
+  fullPrompt?: string;
 }
 
 export interface CarouselPost {
@@ -44,6 +56,10 @@ export interface KieSettings {
   apiKey: string;
 }
 
+export interface GoogleSettings {
+  apiKey: string;
+}
+
 export interface OpenRouterSettings {
   apiKey: string;
 }
@@ -52,5 +68,6 @@ export type Language = 'en' | 'ru';
 
 export enum AppState {
   API_KEY_REQUIRED = 'API_KEY_REQUIRED',
-  READY = 'READY'
+  READY = 'READY',
+  AUTH = 'AUTH'
 }
