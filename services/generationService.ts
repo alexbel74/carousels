@@ -93,7 +93,7 @@ export const regenerateSingleImage = async (
   
   if (!useRawPrompt) {
     const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
-    fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+    fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. CRITICAL: All text overlays on the image MUST be in Russian language exactly as specified in the prompt. Do NOT translate to English. High quality, 4k, professional photography.`;
   }
   
   if (refinement && refinement.trim() !== "") {
@@ -123,7 +123,7 @@ export const regenerateSingleImage = async (
     const create = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${kieSettings.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: "nano-banana-pro", input: kieInput })
+      body: JSON.stringify({ model: kieSettings.model || "nano-banana-pro", input: kieInput })
     }).then(r => r.json());
     
     if (create.code === 200) {
@@ -190,7 +190,7 @@ export const generateCarouselBatch = async (
       
       // Construct the full prompt here to save it in history
       const styleSuffix = (settings.style && settings.style !== 'None / Custom') ? `. Visual style: ${settings.style}. ` : '. ';
-      const fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. High quality, 4k, professional photography.`;
+      const fullPrompt = `${prompt}${styleSuffix}${settings.customStylePrompt}. CRITICAL: All text overlays on the image MUST be in Russian language exactly as specified in the prompt. Do NOT translate to English. High quality, 4k, professional photography.`;
       
       // Pass the full prompt and set useRawPrompt to true
       const url = await regenerateSingleImage(fullPrompt, settings, kieSettings, googleApiKey, refinement, true);
@@ -215,11 +215,12 @@ export const generateCarouselBatch = async (
   return { images, caption };
 };
 
+
 export const publishToTelegram = async (images: string[], caption: string, settings: TelegramSettings) => {
   if (!settings.botToken || !settings.channelId) throw new Error("Credentials missing");
   const media = images.map((url, idx) => ({
     type: 'photo',
-    media: url, 
+    media: url,
     caption: idx === 0 ? caption : undefined,
     parse_mode: 'HTML'
   }));

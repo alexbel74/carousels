@@ -53,6 +53,7 @@ export interface TelegramSettings {
 }
 
 export interface KieSettings {
+  model: string;
   apiKey: string;
 }
 

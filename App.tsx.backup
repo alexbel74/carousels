@@ -34,14 +34,18 @@ const STYLES = [
 const OPEN_ROUTER_MODELS = [
   'openai/gpt-4.1-mini',
   'openai/gpt-4.1',
-  'openai/gpt-5.4',
-  'anthropic/claude-sonnet-4.6',
-  'anthropic/claude-opus-4.6',
+  'openai/gpt-5',
+  'openai/gpt-5.1',
+  'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-sonnet-4',
+  'anthropic/claude-3.7-sonnet',
+  'anthropic/claude-opus-4.1',
+  'anthropic/claude-opus-4.5',
   'anthropic/claude-haiku-4.5',
   'google/gemini-2.5-flash',
   'google/gemini-2.5-pro',
-  'google/gemini-3.1-flash-lite-preview',
-  'google/gemini-3.1-pro-preview'
+  'google/gemini-3-flash-preview',
+  'google/gemini-3-pro-preview'
 ];
 
 // --- DEFAULTS ---
@@ -57,7 +61,7 @@ const DEFAULT_GEN_SETTINGS: GenerationSettings = {
   referenceImages: ['', '', '']
 };
 
-const DEFAULT_KIE: KieSettings = { model: 'nano-banana-pro', apiKey: '' };
+const DEFAULT_KIE: KieSettings = { apiKey: '' };
 const DEFAULT_GOOGLE: GoogleSettings = { apiKey: '' };
 const DEFAULT_OR: OpenRouterSettings = { apiKey: '' };
 const DEFAULT_TG: TelegramSettings = { botToken: '', channelId: '' };
@@ -568,14 +572,6 @@ const App: React.FC = () => {
                                  <select value={settings.imageService} onChange={e => setSettings({...settings, imageService: e.target.value as any})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all">
                                     <option value="google">Google (Gemini 3 Pro Image)</option><option value="kie">Kie.ai (Nano Banana Pro)</option>
                                  </select>
-                              {settings.imageService === 'kie' && (
-                              <div className="space-y-2 mt-3"><span className="text-[10px] font-bold text-slate-600 uppercase tracking-tight">KIE MODEL</span>
-                                 <select value={kieSettings.model} onChange={e => setKieSettings({...kieSettings, model: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-2xl py-3.5 px-4 text-xs text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all">
-                                    <option value="nano-banana-pro">Nano Banana Pro</option>
-                                    <option value="nano-banana-2">Nano Banana 2</option>
-                                 </select>
-                              </div>
-                              )}
                               </div>
                            </div>
                         </div>
@@ -652,12 +648,6 @@ const App: React.FC = () => {
                            <input type="password" value={kieSettings.apiKey} onChange={e => setKieSettings({...kieSettings, apiKey: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white" />
                          </div>
                      </div>
-                         <div className="space-y-1 mt-3"><label className="text-[9px] font-bold text-slate-600 uppercase">KIE MODEL</label>
-                           <select value={kieSettings.model} onChange={e => setKieSettings({...kieSettings, model: e.target.value})} className="w-full bg-[#1e293b] border border-slate-700 rounded-xl py-3 px-4 text-xs text-white">
-                             <option value="nano-banana-pro">Nano Banana Pro</option>
-                             <option value="nano-banana-2">Nano Banana 2</option>
-                           </select>
-                         </div>
                      <div className="mt-auto pt-6 border-t border-slate-800">
                         <h3 className="font-bold text-blue-500 uppercase text-xs tracking-widest mb-4 flex items-center gap-2"><Globe className="w-4 h-4" /> {t.orSettingsTitle}</h3>
                         <div className="space-y-1"><label className="text-[9px] font-bold text-slate-600 uppercase">{t.apiKey}</label>
