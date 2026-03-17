@@ -1,0 +1,18 @@
+services:
+  carousel-pro:
+    build: .
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.carousel.rule=Host(`carouselspro.ru`)
+      - traefik.http.routers.carousel.priority=1
+      - traefik.http.routers.carousel.tls=true
+      - traefik.http.routers.carousel.entrypoints=web,websecure
+      - traefik.http.routers.carousel.tls.certresolver=mytlschallenge
+      - traefik.http.services.carousel.loadbalancer.server.port=80
+    networks:
+      - n8n_default
+
+networks:
+  n8n_default:
+    external: true
