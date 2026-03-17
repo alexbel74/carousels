@@ -1,20 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# CarouselsPro
 
-# Run and deploy your AI Studio app
+AI-powered carousel generator for social media content.
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/drive/1lRL3kmlWQDdZA8pZOrgJ9LHLSh_fLvj-
+- Generate carousels with AI
+- Multiple languages support
+- Export to various formats
+- AI-generated images and text
+
+## API Keys
+
+For best results, use:
+- **Images:** [kie.ai](https://kie.ai) API key
+- **Text generation:** [OpenRouter.ai](https://openrouter.ai) API key
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js
 
+1. Install dependencies: `npm install`
+2. Create `.env.local` with your API keys
+3. Run the app: `npm run dev`
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Deploy with Docker
+
+`docker-compose up -d`
+
+## Live Demo
+
+https://carouselspro.ru
+
+## License
+
+MIT
