@@ -1,0 +1,49 @@
+services:
+  frontend:
+    build: ./frontend
+    image: carousel-pro-frontend:latest
+    container_name: carousel-pro-frontend
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=n8n_default
+      - traefik.http.routers.carousel.rule=Host(`carouselspro.ru`) || Host(`www.carouselspro.ru`)
+      - traefik.http.routers.carousel.priority=1
+      - traefik.http.routers.carousel.tls=true
+      - traefik.http.routers.carousel.entrypoints=web,websecure
+      - traefik.http.routers.carousel.tls.certresolver=mytlschallenge
+      - traefik.http.services.carousel.loadbalancer.server.port=80
+    networks:
+      - n8n_default
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build: ./backend
+    image: carousel-pro-backend:latest
+    container_name: carousel-pro-backend
+    restart: unless-stopped
+    env_file: .env
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=n8n_default
+      - traefik.http.routers.carousel-api.rule=(Host(`carouselspro.ru`) || Host(`www.carouselspro.ru`)) && PathPrefix(`/api`)
+      - traefik.http.routers.carousel-api.priority=100
+      - traefik.http.routers.carousel-api.tls=true
+      - traefik.http.routers.carousel-api.entrypoints=web,websecure
+      - traefik.http.routers.carousel-api.tls.certresolver=mytlschallenge
+      - traefik.http.services.carousel-api.loadbalancer.server.port=3001
+    networks:
+      - n8n_default
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  n8n_default:
+    external: true
